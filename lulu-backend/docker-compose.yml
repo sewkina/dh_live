@@ -1,0 +1,54 @@
+# 噜噜自建后端：xiaozhi-server + LiteLLM 网关（+ 可选的 vLLM 自建模型）
+# 用法：cp .env.example .env 填好后  docker compose up -d --build
+# 要启用自建模型：docker compose --profile gpu up -d（需要 NVIDIA GPU 服务器）
+services:
+  xiaozhi-server:
+    build: .
+    container_name: lulu-xiaozhi
+    restart: always
+    env_file: .env
+    environment:
+      - TZ=Asia/Phnom_Penh
+    ports:
+      - "8000:8000"   # websocket，噜噜连这里
+      - "8003:8003"   # OTA 接口 + 视觉接口
+    volumes:
+      - ./data/config.template.yaml:/opt/xiaozhi-esp32-server/data/config.template.yaml:ro
+    depends_on:
+      - litellm
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: lulu-litellm
+    restart: always
+    env_file: .env
+    command: ["--config", "/app/litellm.yaml", "--port", "4000"]
+    volumes:
+      - ./gateway/litellm.yaml:/app/litellm.yaml:ro
+    # 网关只在内部网络使用，不对公网开放；要给别人开放 API 时再加端口和鉴权
+    expose:
+      - "4000"
+
+  vllm:
+    profiles: ["gpu"]
+    image: vllm/vllm-openai:latest
+    container_name: lulu-vllm
+    restart: always
+    env_file: .env
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+      --served-model-name local-model
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+      --api-key ${VLLM_API_KEY:-change-me}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./models-cache:/root/.cache/huggingface
+    expose:
+      - "8000"
