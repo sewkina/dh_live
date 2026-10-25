@@ -10,4 +10,5 @@ COPY overlay/ ./
 COPY scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python", "app.py"]
+# lulu_app.py 先装拍照硬开关，再运行上游 app.py
+CMD ["python", "lulu_app.py"]
