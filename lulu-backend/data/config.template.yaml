@@ -21,7 +21,7 @@ selected_module:
   LLM: GatewayLLM
   VLLM: GatewayVLLM
   TTS: ElevenLabsTTS
-  Memory: nomem
+  Memory: mem_local_short
   Intent: function_call
 
 # 儿童说话停顿多，句尾静音判定放长，避免把半句话切掉
@@ -48,6 +48,13 @@ Intent:
   function_call:
     type: function_call
     functions: []
+
+# 本地记忆：每轮对话结束后让大模型总结要点，存在服务器 data/.memory.yaml（不上传第三方记忆服务）。
+# 清空这个文件即可让噜噜忘掉。重建容器前要把它挂到宿主机上，不然会丢
+Memory:
+  mem_local_short:
+    type: mem_local_short
+    llm: GatewayLLM
 
 # 大模型和视觉模型都走 LiteLLM 网关，换模型只改 gateway/litellm.yaml
 LLM:
