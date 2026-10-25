@@ -50,7 +50,7 @@ LLM:
     temperature: 0.7
     # Gemini 3 等思考型模型会先用掉一部分额度做“思考”，300 太小会导致回答为空；
     # 回答长短靠提示词控制（两三句话）
-    max_tokens: 2000
+    max_tokens: 1500
 
 VLLM:
   GatewayVLLM:
@@ -63,7 +63,8 @@ TTS:
   ElevenLabsTTS:
     type: elevenlabs
     api_key: ${ELEVENLABS_API_KEY}
-    voice_id: <噜噜音色的 voice_id>
+    # 测试期先用 ElevenLabs 自带音色 Jessica（premade，免费账号可用；音色库里的声音免费账号调接口会返回 402）
+    voice_id: cgSgspJ2msm6clMCkdW9
     model_id: eleven_v3
     output_dir: tmp/
 
