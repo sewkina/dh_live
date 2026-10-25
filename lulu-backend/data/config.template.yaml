@@ -31,7 +31,7 @@ VAD:
     threshold: 0.5
     threshold_low: 0.3
     model_dir: models/snakers4_silero-vad
-    min_silence_duration_ms: 700
+    min_silence_duration_ms: 800
 
 ASR:
   ElevenLabsASR:
@@ -41,6 +41,13 @@ ASR:
     # 留空=自动判断语言（中文、高棉语、英语都能认）；固定 khm 时说中文会被硬识别成高棉语
     language: ""
     output_dir: tmp/
+
+# 只留放音乐（handle_exit_intent、play_music 系统默认加载），去掉天气、新闻、联网搜索、换角色：
+# 发给大模型的工具说明更短，回答更快
+Intent:
+  function_call:
+    type: function_call
+    functions: []
 
 # 大模型和视觉模型都走 LiteLLM 网关，换模型只改 gateway/litellm.yaml
 LLM:
@@ -67,8 +74,9 @@ TTS:
     api_key: ${ELEVENLABS_API_KEY}
     # 测试期先用 ElevenLabs 自带音色 Jessica（premade，免费账号可用；音色库里的声音免费账号调接口会返回 402）
     voice_id: cgSgspJ2msm6clMCkdW9
-    # eleven_flash_v2_5 速度快很多（适合中文、英语测试）；高棉语效果不好时换回 eleven_v3
+    # 中文、英语用快速模型；句子里有高棉文字时自动改用 eleven_v3（快速模型不支持高棉语）
     model_id: eleven_flash_v2_5
+    khmer_model_id: eleven_v3
     output_dir: tmp/
 
 prompt: |

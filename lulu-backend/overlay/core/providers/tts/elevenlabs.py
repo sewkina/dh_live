@@ -1,3 +1,5 @@
+import re
+
 import requests
 from core.utils.util import check_model_key
 from core.providers.tts.base import TTSProviderBase
@@ -5,6 +7,8 @@ from config.logger import setup_logging
 
 TAG = __name__
 logger = setup_logging()
+
+KHMER_RE = re.compile(r"[\u1780-\u17FF\u19E0-\u19FF]")
 
 
 class TTSProvider(TTSProviderBase):
@@ -14,7 +18,9 @@ class TTSProvider(TTSProviderBase):
         super().__init__(config, delete_audio_file)
         self.api_key = config.get("api_key")
         self.voice = config.get("private_voice") or config.get("voice_id")
-        self.model = config.get("model_id", "eleven_v3")
+        # 中文、英语用快速模型；含高棉文字的句子用支持高棉语的模型
+        self.model = config.get("model_id", "eleven_flash_v2_5")
+        self.khmer_model = config.get("khmer_model_id", "eleven_v3")
         self.api_url = config.get("api_url", "https://api.elevenlabs.io/v1/text-to-speech")
         self.audio_file_type = "mp3"
         self.output_format = config.get("output_format", "mp3_44100_128")
@@ -25,7 +31,8 @@ class TTSProvider(TTSProviderBase):
             logger.bind(tag=TAG).error(model_key_msg)
 
     async def text_to_speak(self, text, output_file):
-        body = {"text": text, "model_id": self.model}
+        model = self.khmer_model if KHMER_RE.search(text) else self.model
+        body = {"text": text, "model_id": model}
         if self.language:
             body["language_code"] = self.language
         response = requests.post(
