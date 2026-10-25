@@ -48,7 +48,9 @@ LLM:
     model_name: lulu-chat
     api_key: ${LITELLM_MASTER_KEY}
     temperature: 0.7
-    max_tokens: 300
+    # Gemini 3 等思考型模型会先用掉一部分额度做“思考”，300 太小会导致回答为空；
+    # 回答长短靠提示词控制（两三句话）
+    max_tokens: 2000
 
 VLLM:
   GatewayVLLM:

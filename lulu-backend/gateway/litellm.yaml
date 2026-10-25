@@ -6,10 +6,14 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.8-flash
       api_key: os.environ/GEMINI_API_KEY
+      # 聊天不需要深度思考：压低思考量，省延迟也省 token（否则思考会吃光 max_tokens，回答为空）
+      reasoning_effort: low
   - model_name: lulu-vision
     litellm_params:
       model: gemini/gemini-3.8-flash
       api_key: os.environ/GEMINI_API_KEY
+      # 聊天不需要深度思考：压低思考量，省延迟也省 token（否则思考会吃光 max_tokens，回答为空）
+      reasoning_effort: low
   # 通义千问（阿里云百炼国际版，新加坡）：把上面两个 Gemini 注释掉，打开这两个
   # - model_name: lulu-chat
   #   litellm_params:
