@@ -31,7 +31,7 @@ VAD:
     threshold: 0.5
     threshold_low: 0.3
     model_dir: models/snakers4_silero-vad
-    min_silence_duration_ms: 1200
+    min_silence_duration_ms: 700
 
 ASR:
   ElevenLabsASR:
@@ -67,7 +67,8 @@ TTS:
     api_key: ${ELEVENLABS_API_KEY}
     # 测试期先用 ElevenLabs 自带音色 Jessica（premade，免费账号可用；音色库里的声音免费账号调接口会返回 402）
     voice_id: cgSgspJ2msm6clMCkdW9
-    model_id: eleven_v3
+    # eleven_flash_v2_5 速度快很多（适合中文、英语测试）；高棉语效果不好时换回 eleven_v3
+    model_id: eleven_flash_v2_5
     output_dir: tmp/
 
 prompt: |
