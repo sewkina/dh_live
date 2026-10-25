@@ -14,6 +14,8 @@ services:
       - "8003:8003"   # OTA 接口 + 视觉接口
     volumes:
       - ./data/config.template.yaml:/opt/xiaozhi-esp32-server/data/config.template.yaml:ro
+      # 本地记忆文件放在宿主机，重建容器不丢（第一次启动前先建一个空文件：data/.memory.yaml）
+      - ./data/.memory.yaml:/opt/xiaozhi-esp32-server/data/.memory.yaml
     depends_on:
       - litellm
 
