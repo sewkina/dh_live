@@ -4,11 +4,11 @@ model_list:
   # ---- 测试期：云 API（任选一个；模型名部署前要按各家最新文档核对）----
   - model_name: lulu-chat
     litellm_params:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-3.8-flash
       api_key: os.environ/GEMINI_API_KEY
   - model_name: lulu-vision
     litellm_params:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-3.8-flash
       api_key: os.environ/GEMINI_API_KEY
   # - model_name: lulu-chat
   #   litellm_params:
