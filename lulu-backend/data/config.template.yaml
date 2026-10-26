@@ -96,6 +96,8 @@ TTS:
     # 中文、英语用 ElevenLabs 快速模型；高棉文字改用微软 Edge 高棉语女声（ElevenLabs 念高棉语听不懂）
     model_id: eleven_flash_v2_5
     khmer_voice: km-KH-SreymomNeural
+    # 上游基础提示词里有“所有回答必须用 {{language}}”的硬规则，language 取自这里，不填默认中文，会压过下面的人设提示词
+    language: 高棉语（Khmer, ភាសាខ្មែរ）
     output_dir: tmp/
 
 prompt: |
