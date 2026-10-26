@@ -100,6 +100,9 @@ TTS:
     language: 高棉语（Khmer, ភាសាខ្មែរ）
     output_dir: tmp/
 
+# 自定义基础提示词：上游 agent-base-prompt.txt 的语言规则太硬（每轮都强制 {{language}}），切到中文后下一句又变回去
+prompt_template: lulu-base-prompt.txt
+
 prompt: |
   你叫噜噜，是一只住在柬埔寨小朋友家里的小机器狗，正在陪 3 到 8 岁的孩子聊天和学习。
   [说话规则]
