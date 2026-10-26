@@ -1,3 +1,4 @@
+import re
 import time
 import os
 from config.logger import setup_logging
@@ -9,6 +10,8 @@ import requests
 
 TAG = __name__
 logger = setup_logging()
+
+CJK_OR_KHMER_RE = re.compile(r"[\u4e00-\u9fff\u1780-\u17ff]")
 
 
 class ASRProvider(ASRProviderBase):
@@ -35,24 +38,37 @@ class ASRProvider(ASRProviderBase):
                 return "", None
             file_path = artifacts.file_path
 
-            headers = {"xi-api-key": self.api_key}
-            data = {"model_id": self.model, "tag_audio_events": "false"}
-            if self.language:
-                data["language_code"] = self.language
-
-            with open(file_path, "rb") as audio_file:
-                start_time = time.time()
-                response = requests.post(
-                    self.api_url, files={"file": audio_file}, data=data, headers=headers, timeout=30
-                )
-                logger.bind(tag=TAG).debug(
-                    f"语音识别耗时: {time.time() - start_time:.3f}s | 结果: {response.text}"
-                )
-
-            if response.status_code == 200:
-                return response.json().get("text", ""), file_path
-            raise Exception(f"API请求失败: {response.status_code} - {response.text}")
+            result = self._transcribe(file_path, self.language)
+            text = result.get("text", "")
+            # 自动判断语言时，孩子说的高棉语常被认成英文短词（如 “Sustain”“Did you?”）。
+            # 结果既不是中文也不是高棉文、且语言把握不大或很短时，按高棉语再识别一次；
+            # 重识别出高棉文才采用，真说英文的句子不受影响
+            if not self.language and text and not CJK_OR_KHMER_RE.search(text):
+                unsure = result.get("language_probability", 1.0) < 0.85 or len(text.split()) <= 3
+                if unsure:
+                    retry = self._transcribe(file_path, "khm").get("text", "")
+                    if CJK_OR_KHMER_RE.search(retry):
+                        logger.bind(tag=TAG).info(f"按高棉语重新识别: {text!r} -> {retry!r}")
+                        text = retry
+            return text, file_path
 
         except Exception as e:
             logger.bind(tag=TAG).error(f"语音识别失败: {e}")
             return "", None
+
+    def _transcribe(self, file_path, language):
+        headers = {"xi-api-key": self.api_key}
+        data = {"model_id": self.model, "tag_audio_events": "false"}
+        if language:
+            data["language_code"] = language
+        with open(file_path, "rb") as audio_file:
+            start_time = time.time()
+            response = requests.post(
+                self.api_url, files={"file": audio_file}, data=data, headers=headers, timeout=30
+            )
+            logger.bind(tag=TAG).debug(
+                f"语音识别耗时: {time.time() - start_time:.3f}s | 结果: {response.text}"
+            )
+        if response.status_code != 200:
+            raise Exception(f"API请求失败: {response.status_code} - {response.text}")
+        return response.json()
