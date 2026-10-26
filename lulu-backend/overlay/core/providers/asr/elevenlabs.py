@@ -61,14 +61,19 @@ class ASRProvider(ASRProviderBase):
         data = {"model_id": self.model, "tag_audio_events": "false"}
         if language:
             data["language_code"] = language
-        with open(file_path, "rb") as audio_file:
-            start_time = time.time()
-            response = requests.post(
-                self.api_url, files={"file": audio_file}, data=data, headers=headers, timeout=30
-            )
-            logger.bind(tag=TAG).debug(
-                f"语音识别耗时: {time.time() - start_time:.3f}s | 结果: {response.text}"
-            )
+        # ElevenLabs 繁忙时会返回 429，等一会儿再试，最多重试 2 次
+        for attempt in range(3):
+            with open(file_path, "rb") as audio_file:
+                start_time = time.time()
+                response = requests.post(
+                    self.api_url, files={"file": audio_file}, data=data, headers=headers, timeout=30
+                )
+                logger.bind(tag=TAG).debug(
+                    f"语音识别耗时: {time.time() - start_time:.3f}s | 结果: {response.text}"
+                )
+            if response.status_code != 429 or attempt == 2:
+                break
+            time.sleep(0.5 * (attempt + 1))
         if response.status_code != 200:
             raise Exception(f"API请求失败: {response.status_code} - {response.text}")
         return response.json()
