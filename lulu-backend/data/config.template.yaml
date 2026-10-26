@@ -56,6 +56,18 @@ Memory:
     type: mem_local_short
     llm: GatewayLLM
 
+# 噜噜固件的自定义唤醒词。唤醒时固件把唤醒词文字发给后端，不在这个列表里就会被当成一句话交给大模型，
+# “di da bu”这种拉丁字母会让大模型用英文回“I am here”。比较时会去掉空格和标点
+wakeup_words:
+  - "嘀嗲布"
+  - "hello嘀嗲布"
+  - "Hello嘀嗲布"
+  - "didiabu"
+  - "didabu"
+  - "hailoudidiabu"
+# 关掉唤醒词缓存回复（固定的中文“我在这里哦”），改由大模型按提示词用高棉语打招呼
+enable_wakeup_words_response_cache: false
+
 # 大模型和视觉模型都走 LiteLLM 网关，换模型只改 gateway/litellm.yaml
 LLM:
   GatewayLLM:
