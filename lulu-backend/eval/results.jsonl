@@ -1,0 +1,4 @@
+{"task": "asr", "model": "wav2vec2-km", "n": 30, "cer": 0.345, "cer_median": 0.322, "rtf_cpu": 0.17}
+{"task": "asr", "model": "mms", "n": 30, "cer": 0.149, "cer_median": 0.137, "rtf_cpu": 0.35}
+{"task": "tts_judge_baseline", "judge": "mms", "n": 15, "cer_on_real_speech": 0.123}
+{"task": "tts", "tts": "mms-tts", "judge": "mms", "n": 15, "roundtrip_cer": 0.237, "rtf_cpu": 0.24}

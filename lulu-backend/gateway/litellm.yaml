@@ -1,0 +1,56 @@
+# LiteLLM 网关：xiaozhi-server 只认 lulu-chat / lulu-vision 两个名字，
+# 背后接哪个模型在这里改，改完 docker compose restart litellm 即可，噜噜固件不用动。
+model_list:
+  # ---- 测试期：云 API（任选一个；模型名部署前要按各家最新文档核对）----
+  - model_name: lulu-chat
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      # 轻量版、不思考（实测 1.6 秒出回答）；备用 gemini-3.1-flash-lite。思考型模型会吃光 max_tokens 导致回答为空
+      reasoning_effort: minimal
+  - model_name: lulu-vision
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      # 轻量版、不思考（实测 1.6 秒出回答）；备用 gemini-3.1-flash-lite。思考型模型会吃光 max_tokens 导致回答为空
+      reasoning_effort: minimal
+  # 通义千问（阿里云百炼国际版，新加坡）：把上面两个 Gemini 注释掉，打开这两个
+  # - model_name: lulu-chat
+  #   litellm_params:
+  #     model: openai/qwen-plus
+  #     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  #     api_key: os.environ/DASHSCOPE_API_KEY
+  # - model_name: lulu-vision
+  #   litellm_params:
+  #     model: openai/qwen-vl-plus
+  #     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  #     api_key: os.environ/DASHSCOPE_API_KEY
+  # - model_name: lulu-chat
+  #   litellm_params:
+  #     model: anthropic/claude-haiku-5-5
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  # - model_name: lulu-chat
+  #   litellm_params:
+  #     model: openai/gpt-5-mini
+  #     api_key: os.environ/OPENAI_API_KEY
+
+  # ---- 自建期：docker compose --profile gpu 起 vLLM 后，换成下面这组 ----
+  # - model_name: lulu-chat
+  #   litellm_params:
+  #     model: openai/local-model
+  #     api_base: http://vllm:8000/v1
+  #     api_key: os.environ/VLLM_API_KEY
+  # - model_name: lulu-vision
+  #   litellm_params:
+  #     model: openai/local-model
+  #     api_base: http://vllm:8000/v1
+  #     api_key: os.environ/VLLM_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 30
+  # 云模型挂了自动切到备用（两个都配上时打开）
+  # fallbacks: [{"lulu-chat": ["lulu-chat-backup"]}]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
