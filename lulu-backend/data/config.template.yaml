@@ -38,9 +38,8 @@ ASR:
     type: elevenlabs
     api_key: ${ELEVENLABS_API_KEY}
     model_name: scribe_v1
-    # 2026-10-26 用户选定默认高棉语：固定 khm，高棉语最稳，但说中文会被硬识别成高棉语。
-    # 想中英文也能聊就留空（自动判断，结果像零碎英文时会再按高棉语重识别一次）
-    language: khm
+    # 留空=自动判断语言（中文、高棉语、英语都能认）；固定 khm 时说中文会被硬识别成高棉语
+    language: ""
     output_dir: tmp/
 
 # 只留放音乐（handle_exit_intent、play_music 系统默认加载），去掉天气、新闻、联网搜索、换角色：
