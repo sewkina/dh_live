@@ -16,6 +16,7 @@ KHMER_CHARS = "ក-៿᧠-᧿"
 SEGMENT_RE = re.compile(rf"[{KHMER_CHARS}]+(?:[\s​]*[{KHMER_CHARS}]+)*|[^{KHMER_CHARS}]+")
 KHMER_RE = re.compile(rf"[{KHMER_CHARS}]")
 SPEAKABLE_RE = re.compile(r"[\wក-៿]")
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 class TTSProvider(TTSProviderBase):
@@ -45,7 +46,8 @@ class TTSProvider(TTSProviderBase):
         response = requests.post(
             f"{self.api_url}/{self.voice}",
             params={"output_format": self.output_format},
-            json={"text": text, "model_id": self.model},
+            # 有汉字时锁定普通话，避免被念成粤语口音
+            json={"text": text, "model_id": self.model, "language_code": "zh" if CJK_RE.search(text) else "en"},
             headers={"xi-api-key": self.api_key, "Content-Type": "application/json"},
             timeout=self.tts_timeout,
         )
