@@ -1,0 +1,10 @@
+[
+    {"emote": "sing", "src": "sing.eaf", "loop": true, "fps": 20},
+    {"emote": "shy", "src": "shy.eaf", "loop": true, "fps": 20},
+    {"emote": "dizzy", "src": "dizzy.eaf", "loop": true, "fps": 20},
+    {"emote": "curious", "src": "curious.eaf", "loop": true, "fps": 20},
+    {"emote": "celebrate", "src": "celebrate.eaf", "loop": true, "fps": 20},
+    {"emote": "goodnight", "src": "goodnight.eaf", "loop": true, "fps": 20},
+    {"emote": "great", "src": "great.eaf", "loop": true, "fps": 20},
+    {"emote": "cute", "src": "cute.eaf", "loop": true, "fps": 20}
+]
