@@ -1,0 +1,1250 @@
+diff --git a/main/boards/puppy/ble_remote_control.cc b/main/boards/puppy/ble_remote_control.cc
+index d98bf4c..0a56713 100644
+--- a/main/boards/puppy/ble_remote_control.cc
++++ b/main/boards/puppy/ble_remote_control.cc
+@@ -20,6 +20,7 @@
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
+ #include "host/ble_hs.h"
++#include "kf_link.h"
+ #include "host/ble_uuid.h"
+ #include "host/ble_gap.h"
+ #include "host/ble_gatt.h"
+@@ -349,6 +350,22 @@ extern "C" void ble_remote_send(const uint8_t* data, size_t len) {
+     }
+ }
+ 
++static void ble_kf_reply(const uint8_t* payload, size_t len) {
++    if (len > 240) return;
++    uint8_t frame[256];
++    frame[0] = 0x55;
++    frame[1] = 0x00;
++    frame[2] = (uint8_t)(len + 7);
++    frame[3] = KF_LINK_BLE_ORDER_REPLY;
++    memcpy(&frame[4], payload, len);
++    uint32_t s = frame[2] + frame[3];
++    for (size_t j = 0; j < len; j++) s += payload[j];
++    frame[4 + len] = (uint8_t)(0xFF - (s & 0xFF));
++    frame[5 + len] = 0x00;
++    frame[6 + len] = 0xAA;
++    ble_remote_send(frame, len + 7);
++}
++
+ /**
+  * @brief 处理接收到的 BLE 数据
+  * 遥控协议格式：55 00 LENGTH ORDER PAYLOAD... CHECKSUM 00 AA
+@@ -477,6 +494,12 @@ extern "C" void ble_remote_on_rx(const uint8_t* data, size_t len) {
+         return;
+     }
+ 
++    // 动作编辑器命令（Blender 插件），回复封装成 ORDER=0x21 的帧
++    if (order == KF_LINK_BLE_ORDER_CMD) {
++        kf_link_handle(payload, payload_len, ble_kf_reply);
++        return;
++    }
++
+     // 处理写命令 (0x00/0x01)
+     if (order != 0x00 && order != 0x01) {
+         return;
+diff --git a/main/boards/puppy/keyframe_player.cc b/main/boards/puppy/keyframe_player.cc
+new file mode 100644
+index 0000000..1fb3e64
+--- /dev/null
++++ b/main/boards/puppy/keyframe_player.cc
+@@ -0,0 +1,674 @@
++#include "keyframe_player.h"
++#include "robot.h"
++#include "robot_action.h"
++#include "settings.h"
++#include "application.h"
++#include "board.h"
++#include "display.h"
++#include "assets/lang_config.h"
++#include "em3.h"
++
++static_assert(KF_NUM_JOINTS == MOTOR_NUM, "joint count mismatch");
++
++#include <vector>
++#include <mutex>
++#include <cstring>
++#include <esp_log.h>
++#include <esp_timer.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/task.h>
++
++static const char* TAG = "KF_PLAYER";
++
++#define KF_NVS_NS "kfact"
++
++// 站立姿态（与 normal_state 一致），幅度缩放以它为中心
++static const int16_t kNeutral[MOTOR_NUM] = {-600, 600, -600, 600, 0};
++// 舵机偏移安全范围，按 set_motor_angle 的 -20~135 度（腿）和 ±40 度（腰）换算，待真机核对
++static const int16_t kMinPos[MOTOR_NUM] = {-1250, -550, -1250, -550, -450};
++static const int16_t kMaxPos[MOTOR_NUM] = {  550, 1250,   550, 1250,  450};
++
++struct KfFrame {
++    int d;
++    int16_t p[MOTOR_NUM];
++};
++
++struct KfAction {
++    std::string name;
++    std::string emotion;
++    std::vector<KfFrame> frames;
++    bool spline = false;  // true: Catmull-Rom 样条连续过帧；false: 每帧慢起慢停
++    int loop_from = -1;
++    int loop_to = -1;
++    int loop_times = 1;
++};
++
++static std::mutex kf_mutex;
++
++// 直接控制模式（示教录制 / 实时操控），实现见文件后半部分
++static volatile bool teaching = false;
++static volatile bool live = false;
++static void exit_direct();
++
++// 播放状态：seq[0] 是开始播放时的当前姿态，第 k 段从 seq[k-1] 走到 seq[k]
++static bool playing = false;
++static bool play_spline = false;
++static std::vector<KfFrame> seq;
++static size_t seq_idx = 0;
++static int64_t seg_start_us = 0;
++
++static int16_t clamp_pos(int i, int v) {
++    if (v < kMinPos[i]) return kMinPos[i];
++    if (v > kMaxPos[i]) return kMaxPos[i];
++    return (int16_t)v;
++}
++
++static bool parse_action(cJSON* root, KfAction& out, std::string& err) {
++    if (!cJSON_IsObject(root)) {
++        err = "动作不是 JSON 对象";
++        return false;
++    }
++    cJSON* name = cJSON_GetObjectItem(root, "name");
++    if (!cJSON_IsString(name) || name->valuestring[0] == '\0') {
++        err = "缺少 name";
++        return false;
++    }
++    out.name = name->valuestring;
++    cJSON* emotion = cJSON_GetObjectItem(root, "emotion");
++    if (cJSON_IsString(emotion)) {
++        out.emotion = emotion->valuestring;
++    }
++    cJSON* interp = cJSON_GetObjectItem(root, "interp");
++    out.spline = cJSON_IsString(interp) && strcmp(interp->valuestring, "spline") == 0;
++    cJSON* frames = cJSON_GetObjectItem(root, "frames");
++    int n = cJSON_IsArray(frames) ? cJSON_GetArraySize(frames) : 0;
++    if (n < 1 || n > KF_MAX_FRAMES) {
++        err = "frames 数量需在 1~" + std::to_string(KF_MAX_FRAMES) + " 之间";
++        return false;
++    }
++    for (int k = 0; k < n; k++) {
++        cJSON* f = cJSON_GetArrayItem(frames, k);
++        cJSON* d = cJSON_GetObjectItem(f, "d");
++        cJSON* p = cJSON_GetObjectItem(f, "p");
++        if (!cJSON_IsNumber(d) || !cJSON_IsArray(p) || cJSON_GetArraySize(p) != MOTOR_NUM) {
++            err = "第 " + std::to_string(k) + " 帧格式错误，需要 d 和 5 个 p";
++            return false;
++        }
++        KfFrame frame;
++        frame.d = d->valueint < 20 ? 20 : (d->valueint > 10000 ? 10000 : d->valueint);
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            frame.p[i] = clamp_pos(i, cJSON_GetArrayItem(p, i)->valueint);
++        }
++        out.frames.push_back(frame);
++    }
++    cJSON* loop = cJSON_GetObjectItem(root, "loop");
++    if (cJSON_IsObject(loop)) {
++        cJSON* from = cJSON_GetObjectItem(loop, "from");
++        cJSON* to = cJSON_GetObjectItem(loop, "to");
++        cJSON* times = cJSON_GetObjectItem(loop, "times");
++        if (cJSON_IsNumber(from) && cJSON_IsNumber(to) &&
++            from->valueint >= 0 && from->valueint <= to->valueint && to->valueint < n) {
++            out.loop_from = from->valueint;
++            out.loop_to = to->valueint;
++            out.loop_times = cJSON_IsNumber(times) ? times->valueint : 1;
++        }
++    }
++    return true;
++}
++
++static cJSON* action_to_json(const KfAction& a) {
++    cJSON* root = cJSON_CreateObject();
++    cJSON_AddStringToObject(root, "name", a.name.c_str());
++    if (!a.emotion.empty()) {
++        cJSON_AddStringToObject(root, "emotion", a.emotion.c_str());
++    }
++    if (a.spline) {
++        cJSON_AddStringToObject(root, "interp", "spline");
++    }
++    cJSON* frames = cJSON_AddArrayToObject(root, "frames");
++    for (const auto& f : a.frames) {
++        cJSON* jf = cJSON_CreateObject();
++        cJSON_AddNumberToObject(jf, "d", f.d);
++        int p[MOTOR_NUM];
++        for (int i = 0; i < MOTOR_NUM; i++) p[i] = f.p[i];
++        cJSON_AddItemToObject(jf, "p", cJSON_CreateIntArray(p, MOTOR_NUM));
++        cJSON_AddItemToArray(frames, jf);
++    }
++    if (a.loop_from >= 0) {
++        cJSON* loop = cJSON_AddObjectToObject(root, "loop");
++        cJSON_AddNumberToObject(loop, "from", a.loop_from);
++        cJSON_AddNumberToObject(loop, "to", a.loop_to);
++        cJSON_AddNumberToObject(loop, "times", a.loop_times);
++    }
++    return root;
++}
++
++// ---------- 播放 ----------
++
++static void start_sequence(const KfAction& a, int intensity, int speed, int times) {
++    if (intensity < 10) intensity = 10;
++    if (intensity > 200) intensity = 200;
++    if (speed < 25) speed = 25;
++    if (speed > 400) speed = 400;
++    int loop_times = times > 0 ? times : a.loop_times;
++    if (loop_times < 1) loop_times = 1;
++    if (loop_times > 10) loop_times = 10;
++
++    // 展开循环：0..to，(from..to) 再重复 times-1 次，然后 to+1..末尾
++    std::vector<int> order;
++    int n = (int)a.frames.size();
++    int last = a.loop_from >= 0 ? a.loop_to : n - 1;
++    for (int k = 0; k <= last; k++) order.push_back(k);
++    if (a.loop_from >= 0) {
++        for (int r = 1; r < loop_times; r++) {
++            for (int k = a.loop_from; k <= a.loop_to; k++) order.push_back(k);
++        }
++        for (int k = a.loop_to + 1; k < n; k++) order.push_back(k);
++    }
++
++    std::vector<KfFrame> s;
++    s.push_back(KfFrame{});  // 占位，加锁后填入当前姿态
++    for (int k : order) {
++        KfFrame f = a.frames[k];
++        f.d = f.d * 100 / speed;
++        if (f.d < 40) f.d = 40;
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            f.p[i] = clamp_pos(i, kNeutral[i] + (f.p[i] - kNeutral[i]) * intensity / 100);
++        }
++        s.push_back(f);
++    }
++
++    std::lock_guard<std::mutex> lock(kf_mutex);
++    Action_ID = 0;
++    actionLoop_FLAG = 0;
++    vx = 0.0;
++    vyaw = 0.0;
++    control_mode = 0;
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        s[0].p[i] = motor[i].DesPos - motor[i].ZeroPos;
++    }
++    s[0].d = 0;
++    seq.swap(s);
++    seq_idx = 1;
++    play_spline = a.spline;
++    seg_start_us = esp_timer_get_time();
++    playing = true;
++    ESP_LOGI(TAG, "Play %s: %d steps, intensity=%d speed=%d", a.name.c_str(), (int)seq.size(), intensity, speed);
++}
++
++bool kf_is_playing() {
++    return playing;
++}
++
++static float catmull_rom(float p0, float p1, float p2, float p3, float t) {
++    float t2 = t * t, t3 = t2 * t;
++    return 0.5f * (2.0f * p1 + (p2 - p0) * t +
++                   (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
++                   (3.0f * p1 - p0 - 3.0f * p2 + p3) * t3);
++}
++
++void kf_tick() {
++    std::lock_guard<std::mutex> lock(kf_mutex);
++    if (!playing) {
++        return;
++    }
++    int64_t now = esp_timer_get_time();
++    while (seq_idx < seq.size() && now - seg_start_us >= (int64_t)seq[seq_idx].d * 1000) {
++        seg_start_us += (int64_t)seq[seq_idx].d * 1000;
++        seq_idx++;
++    }
++    if (seq_idx >= seq.size()) {
++        playing = false;
++        normal_state();
++        return;
++    }
++    const KfFrame& from = seq[seq_idx - 1];
++    const KfFrame& to = seq[seq_idx];
++    float t = (float)(now - seg_start_us) / (to.d * 1000.0f);
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        float v;
++        if (play_spline) {
++            // 样条穿过每个关键帧，中途不减速；首尾用端点自身补齐
++            const KfFrame& before = seq[seq_idx >= 2 ? seq_idx - 2 : 0];
++            const KfFrame& after = seq[seq_idx + 1 < seq.size() ? seq_idx + 1 : seq_idx];
++            v = catmull_rom(before.p[i], from.p[i], to.p[i], after.p[i], t);
++        } else {
++            float s = t * t * (3.0f - 2.0f * t);  // smoothstep，每帧慢起慢停
++            v = from.p[i] + (to.p[i] - from.p[i]) * s;
++        }
++        motor[i].DesPos = motor[i].ZeroPos + clamp_pos(i, (int)v);
++    }
++    motor_speed = 0;
++}
++
++void kf_stop() {
++    std::lock_guard<std::mutex> lock(kf_mutex);
++    if (playing) {
++        playing = false;
++        normal_state();
++    }
++}
++
++bool kf_play_json(const std::string& json, int intensity, int speed, int times, std::string& err) {
++    if (teaching || calibrate_mode) {
++        err = "正在录制或标定，不能播放";
++        return false;
++    }
++    if (live) {
++        exit_direct();
++    }
++    cJSON* root = cJSON_Parse(json.c_str());
++    if (!root) {
++        err = "JSON 解析失败";
++        return false;
++    }
++    KfAction a;
++    bool ok = parse_action(root, a, err);
++    cJSON_Delete(root);
++    if (!ok) {
++        return false;
++    }
++    if (!a.emotion.empty()) {
++        auto display = Board::GetInstance().GetDisplay();
++        if (display) {
++            display->SetEmotion(a.emotion.c_str());
++        }
++    }
++    start_sequence(a, intensity, speed, times);
++    return true;
++}
++
++// ---------- 动作库（NVS）----------
++// NVS 键名最长 15 字符，所以用槽位 a0~a31 存，名字放在 JSON 里
++
++static int find_slot(Settings& st, const std::string& name, int* free_slot) {
++    if (free_slot) *free_slot = -1;
++    for (int k = 0; k < KF_MAX_ACTIONS; k++) {
++        std::string json = st.GetString("a" + std::to_string(k));
++        if (json.empty()) {
++            if (free_slot && *free_slot < 0) *free_slot = k;
++            continue;
++        }
++        cJSON* root = cJSON_Parse(json.c_str());
++        cJSON* n = root ? cJSON_GetObjectItem(root, "name") : nullptr;
++        bool match = cJSON_IsString(n) && name == n->valuestring;
++        cJSON_Delete(root);
++        if (match) return k;
++    }
++    return -1;
++}
++
++bool kf_play(const std::string& name, int intensity, int speed, int times, std::string& err) {
++    std::string json;
++    {
++        Settings st(KF_NVS_NS);
++        int slot = find_slot(st, name, nullptr);
++        if (slot < 0) {
++            err = "没有这个动作：" + name;
++            return false;
++        }
++        json = st.GetString("a" + std::to_string(slot));
++    }
++    return kf_play_json(json, intensity, speed, times, err);
++}
++
++static bool save_action(const KfAction& a, std::string& err) {
++    cJSON* root = action_to_json(a);
++    char* str = cJSON_PrintUnformatted(root);
++    std::string json(str);
++    cJSON_free(str);
++    cJSON_Delete(root);
++    if (json.size() >= 4000) {  // nvs_set_str 上限
++        err = "动作太长，请减少帧数";
++        return false;
++    }
++    Settings st(KF_NVS_NS, true);
++    int free_slot;
++    int slot = find_slot(st, a.name, &free_slot);
++    if (slot < 0) slot = free_slot;
++    if (slot < 0) {
++        err = "动作库已满（最多 " + std::to_string(KF_MAX_ACTIONS) + " 个）";
++        return false;
++    }
++    st.SetString("a" + std::to_string(slot), json);
++    ESP_LOGI(TAG, "Saved action %s to slot %d (%d bytes)", a.name.c_str(), slot, (int)json.size());
++    return true;
++}
++
++bool kf_install(const std::string& json, std::string& err) {
++    cJSON* root = cJSON_Parse(json.c_str());
++    if (!root) {
++        err = "JSON 解析失败";
++        return false;
++    }
++    KfAction a;
++    bool ok = parse_action(root, a, err);
++    cJSON_Delete(root);
++    return ok && save_action(a, err);
++}
++
++bool kf_remove(const std::string& name) {
++    Settings st(KF_NVS_NS, true);
++    int slot = find_slot(st, name, nullptr);
++    if (slot < 0) return false;
++    st.EraseKey("a" + std::to_string(slot));
++    return true;
++}
++
++cJSON* kf_list() {
++    cJSON* arr = cJSON_CreateArray();
++    Settings st(KF_NVS_NS);
++    for (int k = 0; k < KF_MAX_ACTIONS; k++) {
++        std::string json = st.GetString("a" + std::to_string(k));
++        if (json.empty()) continue;
++        cJSON* root = cJSON_Parse(json.c_str());
++        cJSON* n = root ? cJSON_GetObjectItem(root, "name") : nullptr;
++        if (cJSON_IsString(n)) {
++            cJSON_AddItemToArray(arr, cJSON_CreateString(n->valuestring));
++        }
++        cJSON_Delete(root);
++    }
++    return arr;
++}
++
++// ---------- 直接控制：示教录制 + 实时操控 ----------
++// 这两种模式下由本模块自己下发舵机指令（robot_control 不再 SetMotorAngle），
++// 卸力的关节不下发位置，并把目标位置跟随实际位置，重新上力时不会跳。
++
++static uint8_t torque_mask = 0x1F;  // bit i = 1 表示第 i 个舵机上力
++static int16_t live_from[MOTOR_NUM];
++static int16_t live_to[MOTOR_NUM];
++static int64_t live_start_us = 0;
++static int live_ms = 0;
++static int64_t live_last_cmd_us = 0;
++static int stream_interval_ms = 0;
++static int64_t stream_last_us = 0;
++static KfPoseSink pose_sink = nullptr;
++
++#define KF_LIVE_TIMEOUT_US (15 * 1000 * 1000)  // 15 秒没有新指令自动退出实时操控
++
++static std::string teach_name;
++static std::vector<KfFrame> teach_frames;
++static std::vector<int64_t> teach_frame_us;
++static int64_t teach_last_us = 0;
++
++static void set_emotion(const char* emotion) {
++    auto display = Board::GetInstance().GetDisplay();
++    if (display) {
++        display->SetEmotion(emotion);
++    }
++}
++
++static void apply_torque_mask(uint8_t mask) {
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        bool on = mask & (1 << i);
++        if (on != (bool)(torque_mask & (1 << i))) {
++            if (on) {
++                motor[i].DesPos = motor[i].FbPos;
++            }
++            for (int k = 0; k < 3; k++) {  // 串口忙时指令可能被丢弃，多发几次
++                EnableMotor(i + 1, on ? 1 : 0);
++                vTaskDelay(pdMS_TO_TICKS(10));
++            }
++        }
++    }
++    torque_mask = mask;
++}
++
++static void enter_direct() {
++    kf_stop();
++    Action_ID = 0;
++    actionLoop_FLAG = 0;
++    vx = 0.0;
++    vyaw = 0.0;
++    control_mode = 0;
++}
++
++static void exit_direct() {
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        motor[i].DesPos = motor[i].FbPos;
++    }
++    teaching = false;
++    live = false;
++    stream_interval_ms = 0;
++    Action_ID = 0;  // 期间收到的内置动作不再补做
++    if (torque_mask != 0x1F) {
++        EnableAllMotor(1);
++        torque_mask = 0x1F;
++    }
++    normal_state();
++}
++
++bool kf_owns_motors() {
++    return teaching || live;
++}
++
++void kf_control_tick() {
++    static int counter = 0;
++    static uint8_t read_id = 1;
++    counter++;
++
++    // 加快舵机回读：每个舵机约 50ms 刷新一次（平时约 1.25s）
++    if (counter % 2 == 0) {
++        ReadMotorState(read_id);
++        read_id = read_id >= MOTOR_NUM ? 1 : read_id + 1;
++    }
++
++    int64_t now = esp_timer_get_time();
++    if (live) {
++        if (now - live_last_cmd_us > KF_LIVE_TIMEOUT_US) {
++            ESP_LOGI(TAG, "Live control timeout");
++            exit_direct();
++            return;
++        }
++        float t = live_ms > 0 ? (float)(now - live_start_us) / (live_ms * 1000.0f) : 1.0f;
++        if (t > 1.0f) t = 1.0f;
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            if (torque_mask & (1 << i)) {
++                int v = live_from[i] + (int)((live_to[i] - live_from[i]) * t);
++                motor[i].DesPos = motor[i].ZeroPos + clamp_pos(i, v);
++            }
++        }
++    }
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        if (!(torque_mask & (1 << i))) {
++            motor[i].DesPos = motor[i].FbPos;
++        }
++    }
++
++    if (counter % 4 == 0 && torque_mask != 0) {
++        if (torque_mask == 0x1F) {
++            short angle[MOTOR_NUM];
++            for (int i = 0; i < MOTOR_NUM; i++) angle[i] = motor[i].DesPos;
++            SetMotorAngle(angle, 0);
++        } else {
++            for (int i = 0; i < MOTOR_NUM; i++) {
++                if (torque_mask & (1 << i)) {
++                    em3_write_pos_vel(i + 1, motor[i].DesPos, 0);
++                }
++            }
++        }
++    }
++
++    if (stream_interval_ms > 0 && pose_sink && now - stream_last_us >= stream_interval_ms * 1000LL) {
++        stream_last_us = now;
++        int16_t pose[MOTOR_NUM];
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            pose[i] = motor[i].FbPos - motor[i].ZeroPos;
++        }
++        pose_sink(pose, torque_mask);
++    }
++}
++
++// ----- 实时操控（蓝牙 / Blender 插件）-----
++
++void kf_set_pose_sink(KfPoseSink sink) {
++    pose_sink = sink;
++}
++
++bool kf_live_pose(const int16_t* pose, int ms) {
++    if (teaching || calibrate_mode) {
++        return false;
++    }
++    if (!live) {
++        enter_direct();
++        live = true;
++        ESP_LOGI(TAG, "Live control start");
++    }
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        live_from[i] = motor[i].DesPos - motor[i].ZeroPos;
++        live_to[i] = clamp_pos(i, pose[i]);
++    }
++    live_ms = ms < 0 ? 0 : (ms > 5000 ? 5000 : ms);
++    live_start_us = esp_timer_get_time();
++    live_last_cmd_us = live_start_us;
++    return true;
++}
++
++bool kf_live_torque(uint8_t mask) {
++    if (teaching || calibrate_mode) {
++        return false;
++    }
++    if (!live) {
++        enter_direct();
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            live_from[i] = live_to[i] = motor[i].DesPos - motor[i].ZeroPos;
++        }
++        live_ms = 0;
++        live = true;
++    }
++    live_last_cmd_us = esp_timer_get_time();
++    apply_torque_mask(mask & 0x1F);
++    // 重新上力的关节以当前实际位置为新目标
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        if (mask & (1 << i)) {
++            live_from[i] = live_to[i] = motor[i].DesPos - motor[i].ZeroPos;
++        }
++    }
++    return true;
++}
++
++void kf_live_stream(int hz) {
++    // 回传姿态要靠 kf_control_tick，所以开流即进入实时操控（保持当前姿态）
++    if (hz > 0 && !live && !teaching && !calibrate_mode) {
++        enter_direct();
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            live_from[i] = live_to[i] = motor[i].DesPos - motor[i].ZeroPos;
++        }
++        live_ms = 0;
++        live = true;
++    }
++    stream_interval_ms = hz <= 0 ? 0 : 1000 / (hz > 50 ? 50 : hz);
++    live_last_cmd_us = esp_timer_get_time();
++}
++
++void kf_live_keepalive() {
++    live_last_cmd_us = esp_timer_get_time();
++}
++
++void kf_live_exit() {
++    if (live) {
++        exit_direct();
++        ESP_LOGI(TAG, "Live control exit");
++    }
++}
++
++// ----- 按键示教录制（不需要电脑）-----
++
++bool kf_is_teaching() {
++    return teaching;
++}
++
++bool kf_teach_start(const std::string& name, std::string& err) {
++    if (calibrate_mode) {
++        err = "正在标定，不能录制";
++        return false;
++    }
++    if (name.empty()) {
++        err = "需要动作名";
++        return false;
++    }
++    if (teaching) {
++        err = "已经在录制中";
++        return false;
++    }
++    if (live) {
++        exit_direct();
++    }
++    enter_direct();
++    teach_name = name;
++    teach_frames.clear();
++    teach_frame_us.clear();
++    teach_last_us = 0;
++    teaching = true;  // 先置位，robot_control 停止统一下发，再卸力
++    apply_torque_mask(0);
++    set_emotion("scanning");
++    ESP_LOGI(TAG, "Teach start: %s", name.c_str());
++    return true;
++}
++
++int kf_teach_frame() {
++    if (!teaching || (int)teach_frames.size() >= KF_MAX_FRAMES) {
++        return -1;
++    }
++    int64_t now = esp_timer_get_time();
++    KfFrame f;
++    // 第一帧：从站立过渡过去用 600ms；之后按两次按键的实际间隔，限制在 0.2~2 秒
++    f.d = 600;
++    if (!teach_frames.empty()) {
++        int ms = (int)((now - teach_last_us) / 1000);
++        f.d = ms < 200 ? 200 : (ms > 2000 ? 2000 : ms);
++    }
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        f.p[i] = clamp_pos(i, motor[i].FbPos - motor[i].ZeroPos);
++    }
++    teach_frames.push_back(f);
++    teach_frame_us.push_back(now);
++    teach_last_us = now;
++    ESP_LOGI(TAG, "Frame %d: %d %d %d %d %d (d=%d)", (int)teach_frames.size(),
++             f.p[0], f.p[1], f.p[2], f.p[3], f.p[4], f.d);
++    return (int)teach_frames.size();
++}
++
++bool kf_teach_save(std::string& err) {
++    if (!teaching) {
++        err = "不在录制中";
++        return false;
++    }
++    if (teach_frames.size() < 2) {
++        err = "至少要录 2 帧";
++        return false;
++    }
++    KfAction a;
++    a.name = teach_name;
++    a.frames = teach_frames;
++    if (!save_action(a, err)) {
++        return false;
++    }
++    exit_direct();
++    set_emotion("neutral");
++    return true;
++}
++
++void kf_teach_cancel() {
++    if (teaching) {
++        exit_direct();
++        set_emotion("neutral");
++    }
++}
++
++void kf_teach_button_save() {
++    // 三连击本身的单击可能被记成帧，去掉最后 1.2 秒内的帧
++    int64_t cutoff = esp_timer_get_time() - 1200 * 1000;
++    while (!teach_frame_us.empty() && teach_frame_us.back() > cutoff) {
++        teach_frame_us.pop_back();
++        teach_frames.pop_back();
++    }
++    std::string err;
++    if (kf_teach_save(err)) {
++        Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS());
++    } else {
++        ESP_LOGW(TAG, "Teach save failed: %s", err.c_str());
++        Application::GetInstance().PlaySound(Lang::Sounds::OGG_EXCLAMATION());
++    }
++}
+diff --git a/main/boards/puppy/keyframe_player.h b/main/boards/puppy/keyframe_player.h
+new file mode 100644
+index 0000000..7046d94
+--- /dev/null
++++ b/main/boards/puppy/keyframe_player.h
+@@ -0,0 +1,60 @@
++#ifndef KEYFRAME_PLAYER_H
++#define KEYFRAME_PLAYER_H
++
++/*
++ * 关键帧动作播放器 + 示教录制
++ *
++ * 动作用 JSON 描述，p 是 5 个舵机相对零点的偏移（与 set_motor_pos 一致，
++ * 顺序：左前、右前、左后、右后、腰），d 是从上一帧过渡到这一帧的毫秒数：
++ * interp 可选 "spline"（Catmull-Rom 样条，连续动作不停顿），默认每帧慢起慢停：
++ * {"name":"wave2","emotion":"happy","interp":"spline",
++ *  "frames":[{"d":400,"p":[-100,700,-600,600,200]},
++ *            {"d":200,"p":[-100,-400,-600,600,400]}],
++ *  "loop":{"from":1,"to":2,"times":3}}
++ *
++ * 录制的动作和通过 MCP 安装的动作保存在 NVS（命名空间 kfact）。
++ */
++
++#include <string>
++#include <stdint.h>
++#include <cJSON.h>
++
++#define KF_MAX_FRAMES  40
++#define KF_MAX_ACTIONS 32
++
++#define KF_NUM_JOINTS 5
++
++// 控制任务（robot_control）里调用
++bool kf_is_playing();
++void kf_tick();
++bool kf_owns_motors();   // 示教录制或实时操控中：由本模块自己下发舵机指令
++void kf_control_tick();
++
++// 播放：intensity/speed 为百分比，100 为原样；times>0 时覆盖 loop.times
++bool kf_play_json(const std::string& json, int intensity, int speed, int times, std::string& err);
++bool kf_play(const std::string& name, int intensity, int speed, int times, std::string& err);
++void kf_stop();
++
++// 动作库（NVS）
++bool kf_install(const std::string& json, std::string& err);
++bool kf_remove(const std::string& name);
++cJSON* kf_list();  // 返回 ["name1","name2",...]，调用方负责释放
++
++// 按键示教录制：单击记一帧，三连击保存
++bool kf_is_teaching();
++bool kf_teach_start(const std::string& name, std::string& err);
++int  kf_teach_frame();  // 记一帧，返回当前帧数，失败返回 -1
++bool kf_teach_save(std::string& err);
++void kf_teach_cancel();
++void kf_teach_button_save();
++
++// 实时操控（蓝牙，Blender 插件用）。pose 是相对零点的偏移，mask bit i = 1 表示上力
++typedef void (*KfPoseSink)(const int16_t* pose, uint8_t torque_mask);
++void kf_set_pose_sink(KfPoseSink sink);
++bool kf_live_pose(const int16_t* pose, int ms);
++bool kf_live_torque(uint8_t mask);
++void kf_live_stream(int hz);  // 以 hz 频率回传实际姿态，0 关闭
++void kf_live_keepalive();
++void kf_live_exit();
++
++#endif
+diff --git a/main/boards/puppy/kf_link.cc b/main/boards/puppy/kf_link.cc
+new file mode 100644
+index 0000000..fe293e9
+--- /dev/null
++++ b/main/boards/puppy/kf_link.cc
+@@ -0,0 +1,207 @@
++#include "kf_link.h"
++#include "keyframe_player.h"
++
++#include <string>
++#include <cstring>
++#include <esp_err.h>
++#include <esp_log.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/task.h>
++#include <sdkconfig.h>
++
++#include <driver/uart.h>
++#include <driver/uart_vfs.h>
++
++static const char* TAG = "KF_LINK";
++static const char* kVersion = "lulu-kf/1";
++
++static KfLinkReply current_reply = nullptr;  // 最近发命令的那条连接负责接收回传
++static std::string upload_buf;
++
++static void reply_ack(KfLinkReply reply, uint8_t cmd, bool ok, const std::string& msg) {
++    uint8_t buf[200];
++    size_t n = msg.size() > sizeof(buf) - 3 ? sizeof(buf) - 3 : msg.size();
++    buf[0] = 0x82;
++    buf[1] = cmd;
++    buf[2] = ok ? 1 : 0;
++    memcpy(&buf[3], msg.data(), n);
++    reply(buf, n + 3);
++}
++
++static void reply_text(KfLinkReply reply, uint8_t code, const std::string& text) {
++    std::string out(1, (char)code);
++    out += text;
++    reply((const uint8_t*)out.data(), out.size());
++}
++
++static void pose_sink(const int16_t* pose, uint8_t mask) {
++    KfLinkReply reply = current_reply;
++    if (!reply) return;
++    uint8_t buf[2 + KF_NUM_JOINTS * 2];
++    buf[0] = 0x81;
++    for (int i = 0; i < KF_NUM_JOINTS; i++) {
++        buf[1 + i * 2] = (uint8_t)(pose[i] & 0xFF);
++        buf[2 + i * 2] = (uint8_t)((pose[i] >> 8) & 0xFF);
++    }
++    buf[1 + KF_NUM_JOINTS * 2] = mask;
++    reply(buf, sizeof(buf));
++}
++
++static int16_t le16(const uint8_t* p) {
++    return (int16_t)(p[0] | (p[1] << 8));
++}
++
++void kf_link_handle(const uint8_t* payload, size_t len, KfLinkReply reply) {
++    if (len < 1 || !reply) return;
++    current_reply = reply;
++    kf_set_pose_sink(pose_sink);
++    uint8_t cmd = payload[0];
++    const uint8_t* arg = payload + 1;
++    size_t arg_len = len - 1;
++    std::string err;
++
++    switch (cmd) {
++        case 0x01: {
++            if (arg_len < KF_NUM_JOINTS * 2 + 2) return;
++            int16_t pose[KF_NUM_JOINTS];
++            for (int i = 0; i < KF_NUM_JOINTS; i++) pose[i] = le16(arg + i * 2);
++            int ms = (uint16_t)le16(arg + KF_NUM_JOINTS * 2);
++            kf_live_pose(pose, ms);  // 高频命令，不回 ACK
++            break;
++        }
++        case 0x02:
++            if (arg_len < 1) return;
++            reply_ack(reply, cmd, kf_live_torque(arg[0]), "");
++            break;
++        case 0x03:
++            if (arg_len < 1) return;
++            kf_live_stream(arg[0]);
++            reply_ack(reply, cmd, true, "");
++            break;
++        case 0x04:
++            upload_buf.clear();
++            reply_ack(reply, cmd, true, "");
++            break;
++        case 0x05:
++            if (upload_buf.size() + arg_len > 8192) {
++                reply_ack(reply, cmd, false, "too large");
++                return;
++            }
++            upload_buf.append((const char*)arg, arg_len);
++            reply_ack(reply, cmd, true, std::to_string(upload_buf.size()));
++            break;
++        case 0x06: {
++            bool ok = kf_install(upload_buf, err);
++            reply_ack(reply, cmd, ok, err);
++            break;
++        }
++        case 0x07: {
++            int intensity = arg_len >= 2 ? (uint16_t)le16(arg) : 100;
++            int speed = arg_len >= 4 ? (uint16_t)le16(arg + 2) : 100;
++            kf_live_exit();
++            bool ok = kf_play_json(upload_buf, intensity, speed, 0, err);
++            reply_ack(reply, cmd, ok, err);
++            break;
++        }
++        case 0x08:
++            kf_live_exit();
++            reply_ack(reply, cmd, true, "");
++            break;
++        case 0x09:
++            kf_live_keepalive();
++            reply_text(reply, 0x89, kVersion);
++            break;
++        case 0x0A: {
++            kf_live_exit();
++            bool ok = kf_play(std::string((const char*)arg, arg_len), 100, 100, 0, err);
++            reply_ack(reply, cmd, ok, err);
++            break;
++        }
++        case 0x0B: {
++            cJSON* list = kf_list();
++            char* str = cJSON_PrintUnformatted(list);
++            reply_text(reply, 0x8B, str);
++            cJSON_free(str);
++            cJSON_Delete(list);
++            break;
++        }
++        default:
++            reply_ack(reply, cmd, false, "unknown cmd");
++            break;
++    }
++}
++
++// ---------- USB 传输 ----------
++// 噜噜的 GPIO19/20 被屏幕 SPI 占用，芯片原生 USB 用不了，所以 USB-C 口（Windows 上的 COMx）
++// 是转串口芯片接的 UART0，和日志共用。
++
++static std::string encode_line(const uint8_t* payload, size_t len) {
++    static const char hex[] = "0123456789abcdef";
++    std::string line = "@R ";
++    for (size_t i = 0; i < len; i++) {
++        line += hex[payload[i] >> 4];
++        line += hex[payload[i] & 0x0F];
++    }
++    line += '\n';
++    return line;
++}
++
++static void uart0_reply(const uint8_t* payload, size_t len) {
++    std::string line = encode_line(payload, len);
++    uart_write_bytes(UART_NUM_0, line.data(), line.size());
++}
++
++
++static int hex_val(char c) {
++    if (c >= '0' && c <= '9') return c - '0';
++    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++    return -1;
++}
++
++static void handle_line(const std::string& line, KfLinkReply reply) {
++    if (line.size() < 4 || line.compare(0, 3, "@L ") != 0) return;
++    uint8_t payload[256];
++    size_t n = 0;
++    for (size_t i = 3; i + 1 < line.size() && n < sizeof(payload); i += 2) {
++        int hi = hex_val(line[i]), lo = hex_val(line[i + 1]);
++        if (hi < 0 || lo < 0) break;
++        payload[n++] = (uint8_t)((hi << 4) | lo);
++    }
++    kf_link_handle(payload, n, reply);
++}
++
++struct LineReader {
++    std::string line;
++    void feed(const uint8_t* buf, int n, KfLinkReply reply) {
++        for (int i = 0; i < n; i++) {
++            char c = (char)buf[i];
++            if (c == '\n' || c == '\r') {
++                if (!line.empty()) handle_line(line, reply);
++                line.clear();
++            } else if (line.size() < 600) {
++                line += c;
++            }
++        }
++    }
++};
++
++static void uart0_task(void* arg) {
++    uint8_t buf[128];
++    LineReader reader;
++    while (true) {
++        int n = uart_read_bytes(UART_NUM_0, buf, sizeof(buf), pdMS_TO_TICKS(50));
++        if (n > 0) reader.feed(buf, n, uart0_reply);
++    }
++}
++
++
++void kf_link_usb_start() {
++    if (uart_driver_install(UART_NUM_0, 1024, 1024, 0, NULL, 0) == ESP_OK) {
++        uart_vfs_dev_use_driver(UART_NUM_0);  // 日志也走驱动，避免和我们的读写抢占
++        xTaskCreate(uart0_task, "kf_link_uart0", 4096, nullptr, 4, nullptr);
++        ESP_LOGI(TAG, "Editor link on UART0");
++    } else {
++        ESP_LOGW(TAG, "UART0 driver install failed");
++    }
++}
+diff --git a/main/boards/puppy/kf_link.h b/main/boards/puppy/kf_link.h
+new file mode 100644
+index 0000000..41f2af3
+--- /dev/null
++++ b/main/boards/puppy/kf_link.h
+@@ -0,0 +1,42 @@
++#ifndef KF_LINK_H
++#define KF_LINK_H
++
++/*
++ * 动作编辑器连接协议（Blender 插件用），USB 和蓝牙共用同一套命令。
++ *
++ * 命令 payload 第一个字节是命令号，多字节整数均为小端：
++ *   0x01 POSE    int16 p[5] + uint16 ms   实时设定 5 个关节（相对零点偏移），ms 内插值过去
++ *   0x02 TORQUE  uint8 mask               bit i = 1 上力，0 卸力（可用手掰）
++ *   0x03 STREAM  uint8 hz                 以 hz 回传实际姿态（0 关闭，最高 50）
++ *   0x04 BUF_RESET                        清空动作上传缓冲
++ *   0x05 BUF_APPEND bytes...              追加动作 JSON 片段
++ *   0x06 BUF_INSTALL                      把缓冲里的 JSON 安装进动作库
++ *   0x07 BUF_PLAY uint16 intensity + uint16 speed   直接播放缓冲里的 JSON（预览，不安装）
++ *   0x08 EXIT                             退出实时操控，恢复站立
++ *   0x09 PING                             保活，回 PONG
++ *   0x0A PLAY name...                     播放动作库里的动作
++ *   0x0B LIST                             列出动作库
++ *
++ * 回复：
++ *   0x81 POSE    int16 p[5] + uint8 mask
++ *   0x82 ACK     uint8 cmd + uint8 ok + 文本
++ *   0x89 PONG    协议版本文本
++ *   0x8B LIST    JSON 文本
++ *
++ * 传输封装：
++ *   USB：一行一条，主机发 "@L <hex>\n"，设备回 "@R <hex>\n"（与日志混在一起，按前缀过滤）
++ *   蓝牙：沿用遥控协议帧 55 00 LEN ORDER PAYLOAD CHK 00 AA，命令 ORDER=0x20，回复 ORDER=0x21
++ */
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define KF_LINK_BLE_ORDER_CMD   0x20
++#define KF_LINK_BLE_ORDER_REPLY 0x21
++
++typedef void (*KfLinkReply)(const uint8_t* payload, size_t len);
++
++void kf_link_handle(const uint8_t* payload, size_t len, KfLinkReply reply);
++void kf_link_usb_start();  // 监听 USB-C 口（UART0）
++
++#endif
+diff --git a/main/boards/puppy/puppy_board.cc b/main/boards/puppy/puppy_board.cc
+index cf52856..536c3ef 100644
+--- a/main/boards/puppy/puppy_board.cc
++++ b/main/boards/puppy/puppy_board.cc
+@@ -28,6 +28,8 @@
+ #include "esp_lcd_gc9a01.h"
+ #include "robot.h"
+ #include "robot_action.h"
++#include "keyframe_player.h"
++#include "kf_link.h"
+ #include "imu.h"
+ 
+ #define TAG "PUPPY"
+@@ -218,8 +220,8 @@ private:
+ 
+         // 记录按键按下时间，并启动定时器
+         boot_button_.OnPressDown([this]() {
+-            // 标定模式下不处理长按
+-            if (calibrate_mode == 1) {
++            // 标定、录制模式下不处理长按（避免误触 NVS 重置）
++            if (calibrate_mode == 1 || kf_is_teaching()) {
+                 return;
+             }
+             button_press_start_time_ = esp_timer_get_time() / 1000;  // 转换为毫秒
+@@ -276,6 +278,12 @@ private:
+             if (calibrate_mode == 1) {
+                 return;
+             }
++            // 录制模式下单击 = 记一帧
++            if (kf_is_teaching()) {
++                int n = kf_teach_frame();
++                Application::GetInstance().PlaySound(n > 0 ? Lang::Sounds::OGG_POPUP() : Lang::Sounds::OGG_EXCLAMATION());
++                return;
++            }
+             auto& app = Application::GetInstance();
+             if (app.GetDeviceState() == kDeviceStateStarting && !WifiManager::GetInstance().IsConnected()) {
+                 EnterWifiConfigMode();
+@@ -555,6 +563,94 @@ private:
+                 return true;
+             });
+ 
++        // ---------- 关键帧动作库 / 示教录制 ----------
++        mcp_server.AddTool("self.dog.play",
++            "播放一个动作。action 可以是内置动作名（wave, naughty, lookup, swing, rolling, angry, swimming, pee, "
++            "stretch, bouncing, shaking, sit, scratch, hug），也可以是 self.dog.list_actions 返回的自定义动作名。"
++            "intensity 动作幅度百分比（100 为原样，说话时建议 50 以下），speed 速度百分比（100 为原样），"
++            "times 重复次数（0 用动作自带的次数）。内置动作忽略 intensity/speed/times。",
++            PropertyList({
++                Property("action", kPropertyTypeString),
++                Property("intensity", kPropertyTypeInteger, 100, 10, 200),
++                Property("speed", kPropertyTypeInteger, 100, 25, 400),
++                Property("times", kPropertyTypeInteger, 0, 0, 10),
++            }), [this](const PropertyList& properties) -> ReturnValue {
++                std::string action = properties["action"].value<std::string>();
++                static const struct { const char* name; uint8_t id; } kBuiltin[] = {
++                    {"wave", Wave_ID}, {"naughty", Naughty_ID}, {"lookup", Lookup_ID}, {"swing", Swing_ID},
++                    {"rolling", Rolling_ID}, {"angry", Angry_ID}, {"swimming", Swimming_ID}, {"pee", Pee_ID},
++                    {"stretch", Stretch_ID}, {"bouncing", Bouncing_ID}, {"shaking", Shaking_ID}, {"sit", Sit_ID},
++                    {"scratch", Scratch_ID}, {"hug", Hug_ID},
++                };
++                for (const auto& b : kBuiltin) {
++                    if (action == b.name) {
++                        Action_ID = b.id;
++                        return true;
++                    }
++                }
++                std::string err;
++                if (!kf_play(action, properties["intensity"].value<int>(), properties["speed"].value<int>(),
++                             properties["times"].value<int>(), err)) {
++                    return err;
++                }
++                return true;
++            });
++
++        mcp_server.AddTool("self.dog.list_actions",
++            "列出噜噜已安装的自定义动作名（不含内置动作）",
++            PropertyList(),
++            [this](const PropertyList& properties) -> ReturnValue {
++                return kf_list();
++            });
++
++        mcp_server.AddTool("self.dog.install_action",
++            "安装或覆盖一个自定义动作。action_json 为动作 JSON："
++            "{\"name\":\"名字\",\"emotion\":\"happy\",\"interp\":\"spline\",\"frames\":[{\"d\":毫秒,\"p\":[5 个舵机偏移]}],"
++            "\"loop\":{\"from\":0,\"to\":1,\"times\":3}}",
++            PropertyList({
++                Property("action_json", kPropertyTypeString),
++            }), [this](const PropertyList& properties) -> ReturnValue {
++                std::string err;
++                if (!kf_install(properties["action_json"].value<std::string>(), err)) {
++                    return err;
++                }
++                return true;
++            });
++
++        mcp_server.AddTool("self.dog.remove_action",
++            "删除一个自定义动作",
++            PropertyList({
++                Property("action", kPropertyTypeString),
++            }), [this](const PropertyList& properties) -> ReturnValue {
++                return kf_remove(properties["action"].value<std::string>());
++            });
++
++        mcp_server.AddTool("self.dog.teach",
++            "示教录制动作。mode=start 开始录制（舵机卸力，用手摆姿势；单击顶部按键记一帧，三连击保存），需要 name；"
++            "mode=frame 记一帧；mode=save 保存并退出；mode=cancel 放弃录制。",
++            PropertyList({
++                Property("mode", kPropertyTypeString),
++                Property("name", kPropertyTypeString, std::string("")),
++            }), [this](const PropertyList& properties) -> ReturnValue {
++                std::string mode = properties["mode"].value<std::string>();
++                std::string err;
++                if (mode == "start") {
++                    if (!kf_teach_start(properties["name"].value<std::string>(), err)) return err;
++                    return std::string("已进入录制模式：用手摆好姿势后单击按键记一帧，录完三连击保存");
++                } else if (mode == "frame") {
++                    int n = kf_teach_frame();
++                    if (n < 0) return std::string("记录失败：不在录制中或帧数已满");
++                    return std::string("已记录第 ") + std::to_string(n) + " 帧";
++                } else if (mode == "save") {
++                    if (!kf_teach_save(err)) return err;
++                    return std::string("动作已保存");
++                } else if (mode == "cancel") {
++                    kf_teach_cancel();
++                    return true;
++                }
++                return std::string("mode 只能是 start/frame/save/cancel");
++            });
++
+         // BLE 遥控模式
+         mcp_server.AddTool("self.ble.remote_control",
+             "开启/关闭蓝牙遥控模式。开启后可用小程序或 APP 遥控机器狗（蓝牙名称与配网时相同）。"
+@@ -621,6 +717,9 @@ public:
+         
+         // IMU 初始化
+         imu_init();
++
++        // 动作编辑器 USB 连接（Blender 插件）
++        kf_link_usb_start();
+         
+         // 机器人控制任务
+         xTaskCreatePinnedToCore([](void* arg) {
+diff --git a/main/boards/puppy/robot.cc b/main/boards/puppy/robot.cc
+index f5d410e..d1485e7 100644
+--- a/main/boards/puppy/robot.cc
++++ b/main/boards/puppy/robot.cc
+@@ -14,6 +14,7 @@
+ #include <esp_heap_caps.h>
+ #include <esp_system.h>
+ #include "robot_action.h"
++#include "keyframe_player.h"
+ #include "application.h"
+ #include "board.h"
+ #include "display.h"
+@@ -184,6 +185,13 @@ void detect_triple_click() {
+                 click_count++;
+ 
+                 if (click_count >= 3) {
++                    // 录制中三连击 = 保存动作并退出录制，不进入标定
++                    if (kf_is_teaching()) {
++                        kf_teach_button_save();
++                        click_count = 0;
++                        first_click_time = 0;
++                        return;
++                    }
+                     auto display = Board::GetInstance().GetDisplay();
+                     if (calibrate_mode == 0) {
+                         // 进入标定模式：舵机归中并禁用
+@@ -242,7 +250,16 @@ void robot_control() {
+     counter++;
+     counter2++;
+ 
+-    if(Action_ID==0){
++    // 关键帧动作播放中又收到内置动作，以内置动作为准
++    if(Action_ID != 0 && kf_is_playing()){
++        kf_stop();
++    }
++    bool kf_direct = kf_owns_motors();
++    if(kf_direct){
++        kf_control_tick();
++    }else if(kf_is_playing()){
++        kf_tick();
++    }else if(Action_ID==0){
+         move();
+     }else{
+         if(counter2%5 == 1||counter2%5 == 3){
+@@ -252,7 +269,7 @@ void robot_control() {
+     for(int i=0;i<5;i++){
+         angle[i] = motor[i].DesPos;
+     }
+-    if(calibrate_mode == 0){
++    if(calibrate_mode == 0 && !kf_direct){
+         SetMotorAngle(angle, motor_speed);
+     }
+     vTaskDelay(pdMS_TO_TICKS(1));
