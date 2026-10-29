@@ -7,7 +7,7 @@
 | `firmware/rig_omni_keyframe.patch` | 固件补丁：关键帧播放器、按键示教录制、实时操控指令（USB + 蓝牙）、新 MCP 工具 |
 | `blender/lulu_animator/` | Blender 插件：噜噜模型和骨架、实时操控真机、手掰录制、翻倒检查、导入导出动作 JSON |
 | `emotes/` | 表情动画生成（第二批是 `make_emotes_v2.py`：会变形的大眼睛，黑底发光 / 白底两套） |
-| `sfx/` | 表情音效：合成萌宠音效 `make_sfx.py`，把自己录的声音修成萌宠声 `cute_voice.py` |
+| `sfx/` | 表情音效：机器人风电子音 `make_sfx_robot.py`、用 ElevenLabs 生成萌宠声 `elevenlabs_sfx.py`、把自己录的声音修成萌宠声 `cute_voice.py` |
 
 > 状态：固件只在云端做过语法检查，没有用 ESP-IDF 完整编译，也没有上真机测试。尺寸、关节方向、重心都是估算值，第一次上真机时需要核对（见文末“上真机要核对的事”）。
 
@@ -81,7 +81,10 @@ idf.py build flash monitor
 - 固件里的显示类换成 `LuluDisplay`（继承原厂 `EmoteDisplay`），每次换表情时查表播对应的 `sfx_<名字>.ogg`
 - 同一个表情不重复播，两次音效至少隔 1.2 秒；平静、在听、思考不配音效
 - 默认只在空闲时播。原因：后端发来的表情通常在噜噜开始说话的同时到达，这时播会盖住说话；聆听时播会被麦克风收进去
-- 换音效：用 `sfx/cute_voice.py` 处理你的录音，生成同名 `sfx_xxx.ogg` 覆盖 `main/boards/puppy/` 里的文件，重新编译
+- 换音效：生成同名 `sfx_xxx.ogg` 覆盖 `main/boards/puppy/` 里的文件，重新编译。三种来源：
+  - `sfx/make_sfx_robot.py`：机器人风电子音（补丁里自带的就是这套）
+  - `sfx/elevenlabs_sfx.py`：在你电脑上用 ElevenLabs 账号按描述生成，每个表情出 3 版挑（先设环境变量 `ELEVENLABS_API_KEY`）
+  - `sfx/cute_voice.py`：处理你自己的录音
   ```powershell
   python cute_voice.py 录音文件夹 --out out          # 文件名就是表情名，happy.m4a → sfx_happy.ogg
   python cute_voice.py 我的录音.m4a happy --pitch 1.9  # 单个文件，调升调倍数

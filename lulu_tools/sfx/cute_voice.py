@@ -4,7 +4,7 @@
   python cute_voice.py 录音文件夹                     → 文件名就是表情名（happy.m4a → sfx_happy.ogg）
   python cute_voice.py 录音.wav happy --pitch 1.8 --preset baby
 
-处理流程：去掉头尾静音 → 升调（保留速度）→ 稍微加快 → 去低频嗡声 → 加一点颤音 → 截到最长 1 秒 → 统一响度
+处理流程：去掉头尾静音 → 升调（保留速度）→ 稍微加快 → 去低频嗡声 → 加一点颤音 → 截到最长 1 秒 → 统一音量
 需要装 ffmpeg（要带 rubberband，官方 Windows 版 full build 自带）。手机录的 m4a、mp3、wav 都行。
 """
 
@@ -36,7 +36,7 @@ def process(src, name, out_dir, preset="pet", pitch=None, max_len=1.0):
         "equalizer=f=3000:t=q:w=1:g=3",          # 亮一点
         "atrim=0:%.2f" % max_len,
         "afade=t=out:st=%.2f:d=0.06" % max(0, max_len - 0.06),
-        "loudnorm=I=-16:TP=-1.5",
+        "dynaudnorm=f=75:g=3",
     ])
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-af", af, "-ar", "48000", "-ac", "1",
                     "-c:a", "libopus", "-b:a", "24k", out], check=True)
