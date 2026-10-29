@@ -6,6 +6,8 @@
 |---|---|
 | `firmware/rig_omni_keyframe.patch` | 固件补丁：关键帧播放器、按键示教录制、实时操控指令（USB + 蓝牙）、新 MCP 工具 |
 | `blender/lulu_animator/` | Blender 插件：噜噜模型和骨架、实时操控真机、手掰录制、翻倒检查、导入导出动作 JSON |
+| `emotes/` | 表情动画生成（第二批是 `make_emotes_v2.py`：会变形的大眼睛，黑底发光 / 白底两套） |
+| `sfx/` | 表情音效：合成萌宠音效 `make_sfx.py`，把自己录的声音修成萌宠声 `cute_voice.py` |
 
 > 状态：固件只在云端做过语法检查，没有用 ESP-IDF 完整编译，也没有上真机测试。尺寸、关节方向、重心都是估算值，第一次上真机时需要核对（见文末“上真机要核对的事”）。
 
@@ -29,6 +31,7 @@ idf.py build flash monitor
 - `robot.cc`：控制循环接入播放器；录制中三连击改为“保存”，不再进标定
 - `puppy_board.cc`：新 MCP 工具、录制模式下按键单击记帧、启动 USB 连接
 - `ble_remote_control.cc`：蓝牙遥控通道增加 ORDER=0x20 的编辑器命令
+- `lulu_sfx.*` + `sfx_*.ogg`：换表情时播短音效（见下面“表情音效”）
 
 ### 动作 JSON 格式
 
@@ -50,6 +53,7 @@ idf.py build flash monitor
 - `d`：从上一帧走到这一帧的毫秒数。第一帧的 `d` 是从当前姿态过渡过去的时间
 - `interp`：`"spline"` 连续不停顿（Catmull-Rom 样条）；不写就是每帧慢起慢停
 - `loop`：第 from 到 to 帧重复 times 次；播放时可以用 `times` 参数覆盖
+- `sound`（可选）：播放时配的音效名（如 `"woof"`、`"happy"`），`"none"` 表示不出声；不写就按 `emotion` 自动配
 - 限制：最多 40 帧，JSON 小于 4000 字节，最多存 32 个动作（存在 NVS）。超出安全范围的角度会被截断
 
 ### 新 MCP 工具（后端 LLM 用）
@@ -61,6 +65,7 @@ idf.py build flash monitor
 | `self.dog.install_action(action_json)` | 安装或覆盖动作，后端可以直接推送 LLM 生成的动作 |
 | `self.dog.remove_action(action)` | 删除动作 |
 | `self.dog.teach(mode, name)` | 语音触发示教录制：start / frame / save / cancel |
+| `self.dog.set_sound_effects(mode)` | 表情音效：0 关闭，1 只在空闲时播（默认），2 总是播 |
 
 原来的 17 个单动作工具保留，建议后端提示词里优先用 `self.dog.play`。
 
@@ -70,6 +75,18 @@ idf.py build flash monitor
 2. 用手摆好姿势，**单击**顶部按键记一帧（会“啵”一声），再摆下一个姿势，再单击……两次单击的间隔就是这两帧之间的时间
 3. 录完后停 2 秒，**三连击**保存（成功会有提示音）。三连击本身产生的点击会被自动去掉
 4. 录制中长按不会触发 NVS 重置
+
+### 表情音效
+
+- 固件里的显示类换成 `LuluDisplay`（继承原厂 `EmoteDisplay`），每次换表情时查表播对应的 `sfx_<名字>.ogg`
+- 同一个表情不重复播，两次音效至少隔 1.2 秒；平静、在听、思考不配音效
+- 默认只在空闲时播。原因：后端发来的表情通常在噜噜开始说话的同时到达，这时播会盖住说话；聆听时播会被麦克风收进去
+- 换音效：用 `sfx/cute_voice.py` 处理你的录音，生成同名 `sfx_xxx.ogg` 覆盖 `main/boards/puppy/` 里的文件，重新编译
+  ```powershell
+  python cute_voice.py 录音文件夹 --out out          # 文件名就是表情名，happy.m4a → sfx_happy.ogg
+  python cute_voice.py 我的录音.m4a happy --pitch 1.9  # 单个文件，调升调倍数
+  ```
+  预设：`pet`（默认，像小动物）、`baby`（像小孩）、`tiny`（更尖更小）
 
 ## 二、Blender 插件
 
@@ -139,3 +156,5 @@ python lulu_link.py install wave.json COM3   # 安装
 5. 实时操控的延迟（USB 和蓝牙各测一次）
 6. 部分关节卸力时，给其他关节发位置指令会不会让卸力的关节重新上力（EM3 舵机的行为没有文档确认）
 7. 用卡尺量 `DIMS` 里的尺寸，翻倒检查才准
+8. 表情音效：空闲时让它做个动作（比如按键触发），听有没有音效；说话中切表情应该没声音。模式 2 下音效和说话的先后顺序要实际听一下
+9. 新表情放进 `emoji/` 后，资源分区（8 MB）是否放得下：编译日志里看 assets 大小
