@@ -353,7 +353,6 @@ def neutral(t):
     gx = kf(t, [(0, 0), (0.15, 0), (0.22, -1), (0.38, -1), (0.45, 0), (0.6, 0), (0.66, 0.8), (0.8, 0.8), (0.86, 0)])
     gy = kf(t, [(0, 0), (0.6, 0), (0.66, -0.3), (0.8, -0.3), (0.86, 0)])
     f.look(gx, gy)
-    f.squash(0.02 * wave(t, 2))
     f.blink(blink(t, [0.5, 0.94, 0.985], 0.06))
     return f
 
@@ -363,7 +362,6 @@ def listen(t):
     f.eyes(w=EW * 1.08, h=EH * 1.08)
     f.tilt = kf(t, [(0, 0), (0.15, -8), (0.85, -8), (1, 0)])
     f.look(0.5, -0.1)
-    f.squash(-0.04 * abs(wave(t, 4)))
     f.blink(blink(t, [0.62], 0.08))
 
     def waves(p, th):
@@ -379,11 +377,11 @@ def listen(t):
 def thinking(t):
     f = Face(glow=GLOW["purple"])
     f.look(0.7, -0.75)
-    f.L.lid = 0.28 + 0.05 * wave(t, 1)
+    f.L.lid = 0.3
     f.L.tilt = -8
     f.R.lid = 0.05
-    f.mouth = ("flat", 0, 10 + 3 * wave(t, 2))
-    f.mx = 112 + 10 * wave(t, 1)
+    f.mouth = ("flat", 0, 10)
+    f.mx = kf(t, [(0, 108), (0.45, 108), (0.55, 128), (0.95, 128), (1, 108)])
     f.blink(blink(t, [0.8], 0.07))
 
     def dots(p, th):
@@ -596,13 +594,13 @@ def curious(t):
     f.L.tilt = -10
     f.R.w *= 1.12
     f.R.h *= 1.12
-    f.tilt = 7 * wave(t, 1)
+    f.tilt = kf(t, [(0, -7), (0.3, -7), (0.4, 7), (0.7, 7), (0.8, -7), (1, -7)])
     f.blink(blink(t, [0.55], 0.06))
     f.mouth = ("o", 0, 7)
     f.mx = 126
 
     def q(p, th):
-        y = 46 + 4 * wave(t, 2)
+        y = 46 - 6 * blink(t, [0.4, 0.8], 0.1)
         col = rgba(GOLD)
         p.arc(198, y - 6, 9, 180, 405, 5.5, col)
         p.line([(198 + 9 * math.cos(math.radians(45)), y - 6 + 9 * math.sin(math.radians(45))), (198, y + 8)], col, 5.5)
@@ -704,12 +702,12 @@ def cute(t):
 # (名字, 中文, 函数, 循环秒数, 帧率)。慢悠悠的表情用 10 帧/秒，文件小一半
 EMOTES = [
     ("neutral", "平静", neutral, 3, 10), ("listen", "在听", listen, 2, 10), ("thinking", "思考", thinking, 3, 10),
-    ("happy", "开心", happy, 1.5, 20), ("laughing", "大笑", laughing, 1.5, 20), ("sad", "难过", sad, 3, 10),
-    ("angry", "生气", angry, 2, 15), ("surprised", "惊讶", surprised, 2, 15), ("sleepy", "困", sleepy, 3, 10),
-    ("loving", "喜爱", loving, 2, 15),
-    ("sing", "唱歌", sing, 2, 15), ("shy", "害羞", shy, 2.5, 10), ("dizzy", "晕乎乎", dizzy, 1.5, 20),
-    ("curious", "好奇", curious, 3, 10), ("celebrate", "庆祝", celebrate, 2, 15), ("goodnight", "晚安", goodnight, 3, 10),
-    ("great", "真棒", great, 2, 15), ("cute", "卖萌", cute, 2.5, 12),
+    ("happy", "开心", happy, 1.5, 20), ("laughing", "大笑", laughing, 1.5, 15), ("sad", "难过", sad, 2.4, 10),
+    ("angry", "生气", angry, 2, 12), ("surprised", "惊讶", surprised, 2, 15), ("sleepy", "困", sleepy, 3, 10),
+    ("loving", "喜爱", loving, 2, 10),
+    ("sing", "唱歌", sing, 2, 10), ("shy", "害羞", shy, 2.5, 10), ("dizzy", "晕乎乎", dizzy, 1.5, 12),
+    ("curious", "好奇", curious, 3, 10), ("celebrate", "庆祝", celebrate, 2, 10), ("goodnight", "晚安", goodnight, 3, 10),
+    ("great", "真棒", great, 2, 10), ("cute", "卖萌", cute, 2.5, 12),
 ]
 
 
@@ -744,7 +742,7 @@ def main(out_root, only=None):
             n = int(round(sec * fps))
             frames = [frame(fn, k / n, theme) for k in range(n)]
             eaf = os.path.join(out_dir, name + ".eaf")
-            write_eaf(eaf, frames)
+            write_eaf(eaf, frames, dedupe=True)
             back = decode_eaf(eaf)
             assert len(back) == n
             back[0].save(os.path.join(out_dir, name + ".gif"), save_all=True, append_images=back[1:],

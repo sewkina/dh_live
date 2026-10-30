@@ -346,13 +346,19 @@ def encode_frame(img):
     return hdr + palette + b"".join(blocks)
 
 
-def write_eaf(path, frames):
+def write_eaf(path, frames, dedupe=False):
+    """dedupe=True：和前面某帧完全相同的帧不再重复存，帧表直接指向那一帧的数据。"""
     datas = [encode_frame(f) for f in frames] + [_INFO]
-    table, off = b"", 0
+    table, off, blob, seen = b"", 0, [], {}
     for d in datas:
+        if dedupe and d in seen:
+            table += struct.pack("<II", len(d), seen[d])
+            continue
+        seen[d] = off
         table += struct.pack("<II", len(d), off)
+        blob.append(d)
         off += len(d)
-    body = table + b"".join(datas)
+    body = table + b"".join(blob)
     header = b"\x89EAF" + struct.pack("<III", len(datas), sum(body) & 0xFFFFFFFF, len(body))
     with open(path, "wb") as f:
         f.write(header + body)

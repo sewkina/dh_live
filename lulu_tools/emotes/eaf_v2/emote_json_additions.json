@@ -27,7 +27,7 @@
   "emote": "laughing",
   "src": "laughing.eaf",
   "loop": true,
-  "fps": 20
+  "fps": 15
  },
  {
   "emote": "sad",
@@ -39,7 +39,7 @@
   "emote": "angry",
   "src": "angry.eaf",
   "loop": true,
-  "fps": 15
+  "fps": 12
  },
  {
   "emote": "surprised",
@@ -57,13 +57,13 @@
   "emote": "loving",
   "src": "loving.eaf",
   "loop": true,
-  "fps": 15
+  "fps": 10
  },
  {
   "emote": "sing",
   "src": "sing.eaf",
   "loop": true,
-  "fps": 15
+  "fps": 10
  },
  {
   "emote": "shy",
@@ -75,7 +75,7 @@
   "emote": "dizzy",
   "src": "dizzy.eaf",
   "loop": true,
-  "fps": 20
+  "fps": 12
  },
  {
   "emote": "curious",
@@ -87,7 +87,7 @@
   "emote": "celebrate",
   "src": "celebrate.eaf",
   "loop": true,
-  "fps": 15
+  "fps": 10
  },
  {
   "emote": "goodnight",
@@ -99,7 +99,7 @@
   "emote": "great",
   "src": "great.eaf",
   "loop": true,
-  "fps": 15
+  "fps": 10
  },
  {
   "emote": "cute",
