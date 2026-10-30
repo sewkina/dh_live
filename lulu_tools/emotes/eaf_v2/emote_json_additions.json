@@ -1,0 +1,110 @@
+[
+ {
+  "emote": "neutral",
+  "src": "neutral.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "listen",
+  "src": "listen.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "thinking",
+  "src": "thinking.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "happy",
+  "src": "happy.eaf",
+  "loop": true,
+  "fps": 20
+ },
+ {
+  "emote": "laughing",
+  "src": "laughing.eaf",
+  "loop": true,
+  "fps": 20
+ },
+ {
+  "emote": "sad",
+  "src": "sad.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "angry",
+  "src": "angry.eaf",
+  "loop": true,
+  "fps": 15
+ },
+ {
+  "emote": "surprised",
+  "src": "surprised.eaf",
+  "loop": true,
+  "fps": 15
+ },
+ {
+  "emote": "sleepy",
+  "src": "sleepy.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "loving",
+  "src": "loving.eaf",
+  "loop": true,
+  "fps": 15
+ },
+ {
+  "emote": "sing",
+  "src": "sing.eaf",
+  "loop": true,
+  "fps": 15
+ },
+ {
+  "emote": "shy",
+  "src": "shy.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "dizzy",
+  "src": "dizzy.eaf",
+  "loop": true,
+  "fps": 20
+ },
+ {
+  "emote": "curious",
+  "src": "curious.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "celebrate",
+  "src": "celebrate.eaf",
+  "loop": true,
+  "fps": 15
+ },
+ {
+  "emote": "goodnight",
+  "src": "goodnight.eaf",
+  "loop": true,
+  "fps": 10
+ },
+ {
+  "emote": "great",
+  "src": "great.eaf",
+  "loop": true,
+  "fps": 15
+ },
+ {
+  "emote": "cute",
+  "src": "cute.eaf",
+  "loop": true,
+  "fps": 12
+ }
+]
