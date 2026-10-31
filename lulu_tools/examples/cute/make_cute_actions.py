@@ -62,6 +62,23 @@ ACTIONS = {
         (700, pose(lf=5, rf=5, lb=62, rb=62, w=-32)), (400, pose(lf=5, rf=5, lb=62, rb=62)),
         (700, STAND),
     ]),
+    # 蹦一下：快速趴低蓄力，再猛地站直，身体往上一弹（不会真的四脚离地）
+    "hop_bounce": dict(emotion="happy", frames=[
+        (350, pose(70, 70, 70, 70)), (120, pose(70, 70, 70, 70)),
+        (80, pose(22, 22, 22, 22)), (160, STAND),
+    ], loop={"from": 0, "to": 3, "times": 3}),
+    # 小兔扑：后腿撑住，两条前腿一起往前扑、上半身压低，再弹回来
+    "bunny_pounce": dict(emotion="laughing", frames=[
+        (250, pose(lf=20, rf=20, lb=48, rb=48)),
+        (110, pose(lf=85, rf=85, lb=48, rb=48)), (150, pose(lf=85, rf=85, lb=48, rb=48)),
+        (120, pose(lf=20, rf=20, lb=48, rb=48)), (250, STAND),
+    ], loop={"from": 0, "to": 3, "times": 2}),
+    # 原地蹦蹦跳：对角腿交替快速抬放，加一点扭腰，像小狗兴奋地原地蹦
+    "happy_hop": dict(emotion="celebrate", frames=[
+        (130, pose(lf=62, rf=30, lb=30, rb=62, w=10)), (130, pose(lf=30, rf=62, lb=62, rb=30, w=-10)),
+        (130, pose(lf=62, rf=30, lb=30, rb=62, w=10)), (130, pose(lf=30, rf=62, lb=62, rb=30, w=-10)),
+        (250, STAND),
+    ], loop={"from": 0, "to": 1, "times": 4}),
 }
 
 
