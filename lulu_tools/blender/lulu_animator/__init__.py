@@ -165,6 +165,30 @@ def _stop_recording(context):
 
 # ------------------------------------------------------------------ 属性
 
+def _angle_getter(i):
+    def get(self):
+        arm = rig.find_rig(bpy.context)
+        return rig.read_angle(arm, i) if arm else lulu_link.STAND_ANGLES[i]
+    return get
+
+
+def _angle_setter(i):
+    def set_(self, value):
+        arm = rig.find_rig(bpy.context)
+        if arm is None:
+            return
+        angles = [0.0] * 5
+        angles[i] = value
+        rig.set_angles(arm, angles, [i])
+    return set_
+
+
+def _angle_prop(i):
+    return FloatProperty(name=JOINT_LABELS[i], min=lulu_link.ANGLE_MIN[i], max=lulu_link.ANGLE_MAX[i], step=100, precision=0,
+                         get=_angle_getter(i), set=_angle_setter(i),
+                         description="关节角度（度）。腿 0 垂直向下、90 水平，站立约 36；腰正值向左转")
+
+
 def _torque_update(self, context):
     if S.link:
         mask = sum((1 << i) for i in range(5) if self.torque[i])
@@ -190,14 +214,19 @@ class LuluProps(bpy.types.PropertyGroup):
                                          description="取消勾选 = 卸力，可以用手掰")
     action_name: StringProperty(name="动作名", default="my_action")
     emotion: EnumProperty(name="表情", items=[(e, "不改表情" if e == "none" else e, "") for e in (
-        "none", "happy", "laughing", "loving", "winking", "silly", "cool", "surprised", "sad", "sleepy",
-        "thinking", "angry", "shocked", "kiss", "relaxed", "confident", "embarrassed", "crying")])
+        "none", "happy", "laughing", "loving", "cute", "shy", "surprised", "sad", "sleepy", "thinking",
+        "curious", "angry", "dizzy", "sing", "celebrate", "great", "goodnight", "neutral", "listen")])
     interp: EnumProperty(name="插值", items=[("spline", "连续（样条）", "一气呵成，中途不停"),
                                            ("ease", "每帧停顿（缓动）", "每个姿势慢起慢停，适合点头等")])
     loop: BoolProperty(name="可重复", description="导出整个动作可循环，播放时可指定次数", default=False)
     simplify_deg: FloatProperty(name="精简误差（度）", default=1.0, min=0.2, max=10.0)
     smooth_window: IntProperty(name="去抖窗口", default=3, min=1, max=9)
     preview_speed: IntProperty(name="预览速度 %", default=100, min=25, max=400)
+    angle_lf: _angle_prop(0)
+    angle_rf: _angle_prop(1)
+    angle_lb: _angle_prop(2)
+    angle_rb: _angle_prop(3)
+    angle_waist: _angle_prop(4)
 
 
 # ------------------------------------------------------------------ 操作
@@ -448,6 +477,34 @@ class LULU_OT_import(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
+class LULU_OT_key_pose(bpy.types.Operator):
+    bl_idname = "lulu.key_pose"
+    bl_label = "给当前姿势打关键帧"
+    bl_description = "在当前帧记下 5 个关节的角度"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        arm = _rig(context)
+        if arm is None:
+            self.report({"ERROR"}, "先生成噜噜模型")
+            return {"CANCELLED"}
+        rig.keyframe_angles(arm, context.scene.frame_current)
+        return {"FINISHED"}
+
+
+class LULU_OT_stand(bpy.types.Operator):
+    bl_idname = "lulu.stand"
+    bl_label = "回到站立"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        arm = _rig(context)
+        if arm is None:
+            return {"CANCELLED"}
+        rig.set_angles(arm, lulu_link.STAND_ANGLES)
+        return {"FINISHED"}
+
+
 # ------------------------------------------------------------------ 界面
 
 class LULU_PT_main(bpy.types.Panel):
@@ -475,6 +532,16 @@ class LULU_PT_main(bpy.types.Panel):
         row.operator("lulu.connect", icon="PLUGIN")
         row.operator("lulu.disconnect")
         box.label(text=S.status)
+
+        if _rig(context) is not None:
+            box = layout.box()
+            box.label(text="摆姿势（直接拖，不用选骨骼）", icon="POSE_HLT")
+            col = box.column(align=True)
+            for key in ("angle_lf", "angle_rf", "angle_lb", "angle_rb", "angle_waist"):
+                col.prop(props, key, slider=True)
+            row = box.row()
+            row.operator("lulu.key_pose", icon="KEYFRAME_HLT")
+            row.operator("lulu.stand", icon="LOOP_BACK")
 
         box = layout.box()
         box.label(text="实时操控", icon="ARMATURE_DATA")
@@ -507,7 +574,14 @@ class LULU_PT_main(bpy.types.Panel):
 
 
 CLASSES = (LuluProps, LULU_OT_install_deps, LULU_OT_build_rig, LULU_OT_connect, LULU_OT_disconnect,
-           LULU_OT_record, LULU_OT_check, LULU_OT_send, LULU_OT_export, LULU_OT_import, LULU_PT_main)
+           LULU_OT_record, LULU_OT_key_pose, LULU_OT_stand, LULU_OT_check, LULU_OT_send, LULU_OT_export, LULU_OT_import, LULU_PT_main)
+
+
+@persistent
+def _on_load(*_args):
+    for obj in bpy.data.objects:
+        if obj.type == "ARMATURE" and all(n in obj.pose.bones for n in JOINTS):
+            rig.lock_shells(obj)
 
 
 def register():
@@ -516,6 +590,7 @@ def register():
     bpy.types.Scene.lulu = bpy.props.PointerProperty(type=LuluProps)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     bpy.app.handlers.frame_change_post.append(_on_frame)
+    bpy.app.handlers.load_post.append(_on_load)
     _modules_dir()
 
 
@@ -524,7 +599,8 @@ def unregister():
         S.link.close()
         S.link = None
     for h, fn in ((bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
-                  (bpy.app.handlers.frame_change_post, _on_frame)):
+                  (bpy.app.handlers.frame_change_post, _on_frame),
+                  (bpy.app.handlers.load_post, _on_load)):
         if fn in h:
             h.remove(fn)
     del bpy.types.Scene.lulu

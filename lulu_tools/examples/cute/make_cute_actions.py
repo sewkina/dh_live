@@ -23,43 +23,43 @@ STAND = pose()
 ACTIONS = {
     # 歪头卖萌：上半身慢慢往左扭、停一下，再往右扭、停一下，回正
     "cute_tilt": dict(emotion="cute", frames=[
-        (500, pose(w=22)), (500, pose(w=22)),
-        (700, pose(w=-22)), (500, pose(w=-22)),
+        (500, pose(lf=44, rf=44, w=38)), (500, pose(lf=44, rf=44, w=38)),
+        (700, pose(lf=44, rf=44, w=-38)), (500, pose(lf=44, rf=44, w=-38)),
         (500, STAND),
     ]),
     # 伸懒腰：前腿往前伸、胸口压低屁股翘高（像小狗邀玩），停住，再换后腿往后蹬
     "stretch": dict(emotion="sleepy", frames=[
-        (900, pose(lf=80, rf=80, lb=22, rb=22)), (1200, pose(lf=80, rf=80, lb=22, rb=22)),
-        (800, pose(lf=30, rf=30, lb=60, rb=60)), (900, pose(lf=30, rf=30, lb=60, rb=60)),
+        (900, pose(lf=88, rf=88, lb=12, rb=12)), (1200, pose(lf=88, rf=88, lb=12, rb=12)),
+        (800, pose(lf=22, rf=22, lb=80, rb=80)), (900, pose(lf=22, rf=22, lb=80, rb=80)),
         (700, STAND),
     ]),
     # 摇屁股：腰快速左右摇，中间三下循环
     "wiggle": dict(emotion="happy", frames=[
-        (250, pose(w=15)), (180, pose(w=-15)), (180, pose(w=15)), (180, pose(w=-15)),
+        (250, pose(w=30)), (200, pose(w=-30)), (200, pose(w=30)), (200, pose(w=-30)),
         (300, STAND),
     ], loop={"from": 1, "to": 2, "times": 3}),
     # 开心跺脚：两条前腿轮流往前抬一下，像小碎步
     "happy_tap": dict(emotion="celebrate", frames=[
-        (220, pose(lf=68, w=6)), (200, pose(w=0)),
-        (200, pose(rf=68, w=-6)), (200, pose(w=0)),
+        (220, pose(lf=95, w=8)), (200, pose(w=0)),
+        (200, pose(rf=95, w=-8)), (200, pose(w=0)),
         (300, STAND),
     ], loop={"from": 0, "to": 3, "times": 3}),
     # 害羞扭扭：低头往左扭，小幅扭两下，再慢慢抬头
     "shy_twist": dict(emotion="shy", frames=[
-        (600, pose(lf=55, rf=55, w=25)), (300, pose(lf=55, rf=55, w=15)),
-        (300, pose(lf=55, rf=55, w=25)), (300, pose(lf=55, rf=55, w=15)),
-        (800, pose(lf=55, rf=55, w=25)), (700, STAND),
+        (600, pose(lf=72, rf=72, w=38)), (300, pose(lf=72, rf=72, w=22)),
+        (300, pose(lf=72, rf=72, w=38)), (300, pose(lf=72, rf=72, w=22)),
+        (800, pose(lf=72, rf=72, w=38)), (700, STAND),
     ]),
     # 趴下撒娇：慢慢趴下，趴着左右蹭两下，再站起来
     "lie_cuddle": dict(emotion="loving", frames=[
-        (1000, pose(85, 85, 85, 85)), (500, pose(85, 85, 85, 85, 18)),
-        (500, pose(85, 85, 85, 85, -18)), (500, pose(85, 85, 85, 85, 18)),
+        (1000, pose(85, 85, 85, 85)), (500, pose(85, 85, 85, 85, 32)),
+        (500, pose(85, 85, 85, 85, -32)), (500, pose(85, 85, 85, 85, 32)),
         (500, pose(85, 85, 85, 85)), (900, STAND),
     ]),
     # 好奇探头：前腿往后收、身体前倾探头看，左右张望，再缩回来
     "curious_peek": dict(emotion="curious", frames=[
-        (600, pose(lf=18, rf=18, lb=50, rb=50)), (600, pose(lf=18, rf=18, lb=50, rb=50, w=18)),
-        (700, pose(lf=18, rf=18, lb=50, rb=50, w=-18)), (400, pose(lf=18, rf=18, lb=50, rb=50)),
+        (600, pose(lf=5, rf=5, lb=62, rb=62)), (600, pose(lf=5, rf=5, lb=62, rb=62, w=32)),
+        (700, pose(lf=5, rf=5, lb=62, rb=62, w=-32)), (400, pose(lf=5, rf=5, lb=62, rb=62)),
         (700, STAND),
     ]),
 }

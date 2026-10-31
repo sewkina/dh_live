@@ -205,6 +205,7 @@ def build_rig(context):
     if scene.render.fps not in (25, 30, 50, 60):
         scene.render.fps = 30
     set_angles(arm, STAND_ANGLES)
+    lock_shells(arm)
     view_layer.objects.active = arm
     return arm
 
@@ -230,6 +231,22 @@ def set_angles(arm, angles, joints=None):
             pb.rotation_euler = (a, 0.0, 0.0)
         else:
             pb.rotation_euler = (-a, 0.0, 0.0)
+
+
+def read_angle(arm, i):
+    """直接从骨骼旋转读一个关节角度（度），只适用于本插件生成的骨架（滑块用）。"""
+    pb = arm.pose.bones[JOINTS[i]]
+    if i == 4:
+        return math.degrees(pb.rotation_euler[2])
+    a = math.degrees(pb.rotation_euler[0])
+    return a if JOINTS[i] in FRONT_LEGS else -a
+
+
+def lock_shells(arm):
+    """外壳网格设成点不中：点身体直接选到骨骼。"""
+    for obj in arm.children_recursive:
+        if obj.type != "ARMATURE":
+            obj.hide_select = True
 
 
 def get_angles(arm):
