@@ -9,7 +9,7 @@
 import math
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from .lulu_link import ANGLE_MAX, ANGLE_MIN, DIMS, JOINTS, STAND_ANGLES
 
@@ -104,11 +104,17 @@ def _sphere(name, radius, location, scale, mat):
 
 
 def _parent_to_bone(obj, arm, bone):
-    mw = obj.matrix_world.copy()
+    """骨骼父级，保持部件在静止姿态下的世界位置不变。
+    新建的部件和骨骼都还没经过场景刷新，matrix_world 是旧值，读写它会让部件偏到中线、沉到地下。
+    所以位置取 matrix_basis（由 location/rotation/scale 直接算出），父逆矩阵按骨骼静止矩阵算（骨骼父级相对骨骼尾端）。"""
+    mw = obj.matrix_basis.copy()
+    b = arm.data.bones[bone]
+    rest_tail = arm.matrix_world @ b.matrix_local @ Matrix.Translation((0.0, b.length, 0.0))
     obj.parent = arm
     obj.parent_type = "BONE"
     obj.parent_bone = bone
-    obj.matrix_world = mw
+    obj.matrix_parent_inverse = rest_tail.inverted()
+    obj.matrix_basis = mw
 
 
 def build_rig(context):
