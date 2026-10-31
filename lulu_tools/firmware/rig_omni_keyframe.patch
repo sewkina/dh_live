@@ -48,10 +48,10 @@ index d98bf4c..0a56713 100644
          return;
 diff --git a/main/boards/puppy/keyframe_player.cc b/main/boards/puppy/keyframe_player.cc
 new file mode 100644
-index 0000000..09786d1
+index 0000000..bee22fc
 --- /dev/null
 +++ b/main/boards/puppy/keyframe_player.cc
-@@ -0,0 +1,689 @@
+@@ -0,0 +1,694 @@
 +#include "keyframe_player.h"
 +#include "lulu_sfx.h"
 +#include "robot.h"
@@ -469,19 +469,24 @@ index 0000000..09786d1
 +}
 +
 +static void apply_torque_mask(uint8_t mask) {
++    // 先更新 torque_mask，控制循环立刻停止给要卸力的舵机写位置，再发卸力指令。
++    // EM3 舵机收到位置指令会自动重新上力，顺序反过来的话刚卸力就又被锁住。
++    uint8_t old = torque_mask;
++    for (int i = 0; i < MOTOR_NUM; i++) {
++        if ((mask & (1 << i)) && !(old & (1 << i))) {
++            motor[i].DesPos = motor[i].FbPos;
++        }
++    }
++    torque_mask = mask;
 +    for (int i = 0; i < MOTOR_NUM; i++) {
 +        bool on = mask & (1 << i);
-+        if (on != (bool)(torque_mask & (1 << i))) {
-+            if (on) {
-+                motor[i].DesPos = motor[i].FbPos;
-+            }
++        if (on != (bool)(old & (1 << i))) {
 +            for (int k = 0; k < 3; k++) {  // 串口忙时指令可能被丢弃，多发几次
 +                EnableMotor(i + 1, on ? 1 : 0);
 +                vTaskDelay(pdMS_TO_TICKS(10));
 +            }
 +        }
 +    }
-+    torque_mask = mask;
 +}
 +
 +static void enter_direct() {
