@@ -48,10 +48,10 @@ index d98bf4c..0a56713 100644
          return;
 diff --git a/main/boards/puppy/keyframe_player.cc b/main/boards/puppy/keyframe_player.cc
 new file mode 100644
-index 0000000..47ea5ab
+index 0000000..80e6045
 --- /dev/null
 +++ b/main/boards/puppy/keyframe_player.cc
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,708 @@
 +#include "keyframe_player.h"
 +#include "lulu_sfx.h"
 +#include "robot.h"
@@ -468,56 +468,43 @@ index 0000000..47ea5ab
 +    }
 +}
 +
-+// 上力/卸力指令改由 kf_control_tick（robot 任务，总线的唯一写者）发送。
-+// 舵机总线没有互斥锁，忙时 scs_bus 直接丢弃指令：从连接任务直接发 EnableMotor
-+// 会和 robot 任务的读状态、写位置撞车，卸力指令几乎全被丢掉，腿一直锁着。
-+static volatile uint8_t pending_on = 0;
-+static volatile uint8_t pending_off = 0;
-+static volatile int pending_repeat = 0;
++// 上力/卸力指令只在控制循环（robot_control 任务）里发：舵机总线没有加锁，
++// 从 USB/蓝牙任务直接发会和控制循环的读写撞包，卸力指令被丢掉（标定模式也是在控制循环里卸力）
++static volatile uint8_t torque_pending = 0;  // 待发送使能指令的关节
++static volatile int torque_resend = 0;       // 还要重发几轮
 +
 +static void apply_torque_mask(uint8_t mask) {
 +    uint8_t old = torque_mask;
-+    uint8_t on = mask & ~old & 0x1F;
-+    uint8_t off = old & ~mask & 0x1F;
 +    for (int i = 0; i < MOTOR_NUM; i++) {
-+        if (on & (1 << i)) {
++        if ((mask & (1 << i)) && !(old & (1 << i))) {
 +            motor[i].DesPos = motor[i].FbPos;
 +        }
 +    }
-+    // 先更新 mask：控制循环立刻停止给要卸力的舵机写位置（EM3 收到位置指令会自动重新上力）
++    // 先更新掩码：控制循环就不再给卸力的舵机写位置，否则写位置会把它重新上力
 +    torque_mask = mask;
-+    pending_on = (pending_on & ~off) | on;
-+    pending_off = (pending_off & ~on) | off;
-+    pending_repeat = 5;  // 连发几轮，防止个别帧丢失
++    torque_pending |= (uint8_t)(old ^ mask);
++    torque_resend = 10;
 +}
 +
-+// 在 robot 任务里发送待发的上力/卸力指令，发了返回 true（这一轮不再读写别的）
-+static bool flush_torque_cmds() {
-+    if (pending_repeat <= 0) {
++// 在控制循环里调用：把待发的上力/卸力指令发出去，每轮每个关节一次，共发几轮防丢包
++// 返回 true 表示本轮发了使能指令（本轮不再读写，让总线空出来）
++static bool flush_torque_commands() {
++    if (!torque_pending || torque_resend <= 0) {
 +        return false;
 +    }
-+    uint8_t on = pending_on, off = pending_off;
-+    for (int i = 0; i < MOTOR_NUM; i++) {
-+        if (on & (1 << i)) {
-+            EnableMotor(i + 1, 1);
-+        } else if (off & (1 << i)) {
-+            EnableMotor(i + 1, 0);
++    // 和原厂标定一样：先等总线上的回读应答结束（半双工，正在应答时发的指令会丢），
++    // 再连续发多轮，期间不穿插读写
++    vTaskDelay(pdMS_TO_TICKS(50));
++    for (; torque_resend > 0; torque_resend--) {
++        for (int i = 0; i < MOTOR_NUM; i++) {
++            if (torque_pending & (1 << i)) {
++                EnableMotor(i + 1, (torque_mask & (1 << i)) ? 1 : 0);
++                vTaskDelay(pdMS_TO_TICKS(10));
++            }
 +        }
 +    }
-+    if (--pending_repeat <= 0) {
-+        pending_on = 0;
-+        pending_off = 0;
-+    }
++    torque_pending = 0;
 +    return true;
-+}
-+
-+static void enter_direct() {
-+    kf_stop();
-+    Action_ID = 0;
-+    actionLoop_FLAG = 0;
-+    vx = 0.0;
-+    vyaw = 0.0;
-+    control_mode = 0;
 +}
 +
 +static void exit_direct() {
@@ -528,9 +515,7 @@ index 0000000..47ea5ab
 +    live = false;
 +    stream_interval_ms = 0;
 +    Action_ID = 0;  // 期间收到的内置动作不再补做
-+    pending_repeat = 0;
-+    pending_on = 0;
-+    pending_off = 0;
++    torque_pending = 0;
 +    if (torque_mask != 0x1F) {
 +        EnableAllMotor(1);
 +        torque_mask = 0x1F;
@@ -547,7 +532,7 @@ index 0000000..47ea5ab
 +    static uint8_t read_id = 1;
 +    counter++;
 +
-+    if (flush_torque_cmds()) {
++    if (flush_torque_commands()) {
 +        return;
 +    }
 +
