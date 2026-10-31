@@ -48,10 +48,10 @@ index d98bf4c..0a56713 100644
          return;
 diff --git a/main/boards/puppy/keyframe_player.cc b/main/boards/puppy/keyframe_player.cc
 new file mode 100644
-index 0000000..bee22fc
+index 0000000..47ea5ab
 --- /dev/null
 +++ b/main/boards/puppy/keyframe_player.cc
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,723 @@
 +#include "keyframe_player.h"
 +#include "lulu_sfx.h"
 +#include "robot.h"
@@ -468,25 +468,47 @@ index 0000000..bee22fc
 +    }
 +}
 +
++// 上力/卸力指令改由 kf_control_tick（robot 任务，总线的唯一写者）发送。
++// 舵机总线没有互斥锁，忙时 scs_bus 直接丢弃指令：从连接任务直接发 EnableMotor
++// 会和 robot 任务的读状态、写位置撞车，卸力指令几乎全被丢掉，腿一直锁着。
++static volatile uint8_t pending_on = 0;
++static volatile uint8_t pending_off = 0;
++static volatile int pending_repeat = 0;
++
 +static void apply_torque_mask(uint8_t mask) {
-+    // 先更新 torque_mask，控制循环立刻停止给要卸力的舵机写位置，再发卸力指令。
-+    // EM3 舵机收到位置指令会自动重新上力，顺序反过来的话刚卸力就又被锁住。
 +    uint8_t old = torque_mask;
++    uint8_t on = mask & ~old & 0x1F;
++    uint8_t off = old & ~mask & 0x1F;
 +    for (int i = 0; i < MOTOR_NUM; i++) {
-+        if ((mask & (1 << i)) && !(old & (1 << i))) {
++        if (on & (1 << i)) {
 +            motor[i].DesPos = motor[i].FbPos;
 +        }
 +    }
++    // 先更新 mask：控制循环立刻停止给要卸力的舵机写位置（EM3 收到位置指令会自动重新上力）
 +    torque_mask = mask;
++    pending_on = (pending_on & ~off) | on;
++    pending_off = (pending_off & ~on) | off;
++    pending_repeat = 5;  // 连发几轮，防止个别帧丢失
++}
++
++// 在 robot 任务里发送待发的上力/卸力指令，发了返回 true（这一轮不再读写别的）
++static bool flush_torque_cmds() {
++    if (pending_repeat <= 0) {
++        return false;
++    }
++    uint8_t on = pending_on, off = pending_off;
 +    for (int i = 0; i < MOTOR_NUM; i++) {
-+        bool on = mask & (1 << i);
-+        if (on != (bool)(old & (1 << i))) {
-+            for (int k = 0; k < 3; k++) {  // 串口忙时指令可能被丢弃，多发几次
-+                EnableMotor(i + 1, on ? 1 : 0);
-+                vTaskDelay(pdMS_TO_TICKS(10));
-+            }
++        if (on & (1 << i)) {
++            EnableMotor(i + 1, 1);
++        } else if (off & (1 << i)) {
++            EnableMotor(i + 1, 0);
 +        }
 +    }
++    if (--pending_repeat <= 0) {
++        pending_on = 0;
++        pending_off = 0;
++    }
++    return true;
 +}
 +
 +static void enter_direct() {
@@ -506,6 +528,9 @@ index 0000000..bee22fc
 +    live = false;
 +    stream_interval_ms = 0;
 +    Action_ID = 0;  // 期间收到的内置动作不再补做
++    pending_repeat = 0;
++    pending_on = 0;
++    pending_off = 0;
 +    if (torque_mask != 0x1F) {
 +        EnableAllMotor(1);
 +        torque_mask = 0x1F;
@@ -521,6 +546,10 @@ index 0000000..bee22fc
 +    static int counter = 0;
 +    static uint8_t read_id = 1;
 +    counter++;
++
++    if (flush_torque_cmds()) {
++        return;
++    }
 +
 +    // 加快舵机回读：每个舵机约 50ms 刷新一次（平时约 1.25s）
 +    if (counter % 2 == 0) {
