@@ -1,0 +1,14 @@
+{
+  "name": "sing",
+  "label": "唱歌",
+  "frames": 30,
+  "fps": 20,
+  "bg": "#0C102C",
+  "layers": [
+    {"src": "eye_L.svg", "move": {"y": 4, "freq": 2}},
+    {"src": "eye_R.svg", "move": {"y": 4, "freq": 2, "phase": 0.5}},
+    {"src": "mouth.svg", "scale": {"amp": 0.3, "freq": 4}},
+    {"sprites": ["note_gold.svg", "note_cyan.svg", "note_pink.svg"], "size": 16,
+     "particles": {"count": 3, "from": [190, 196], "to": [206, 76], "wobble": 6, "scale": [0.9, 1.3]}}
+  ]
+}
