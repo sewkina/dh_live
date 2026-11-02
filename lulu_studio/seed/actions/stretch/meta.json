@@ -1,0 +1,10 @@
+{
+ "name": "伸懒腰",
+ "desc": "前腿往前伸，屁股翘起来伸个懒腰",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "stretch.json",
+ "order": 9
+}

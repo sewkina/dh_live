@@ -1,0 +1,10 @@
+{
+ "name": "原地蹦蹦跳",
+ "desc": "对角腿交替，原地蹦蹦跳",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "happy_hop.json",
+ "order": 4
+}

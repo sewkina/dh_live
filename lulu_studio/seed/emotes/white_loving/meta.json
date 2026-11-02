@@ -1,0 +1,15 @@
+{
+ "name": "喜欢你",
+ "desc": "白底大眼睛表情（当前噜噜在用的这套）",
+ "tags": [
+  "白底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "loving.eaf",
+ "preview": "preview.gif",
+ "emote": "loving",
+ "fps": 15,
+ "loop": true,
+ "sound": "sfx_loving.ogg",
+ "order": 6
+}

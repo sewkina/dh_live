@@ -1,0 +1,10 @@
+{
+ "name": "歪头卖萌",
+ "desc": "歪着头左右晃，卖个萌",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "cute_tilt.json",
+ "order": 1
+}

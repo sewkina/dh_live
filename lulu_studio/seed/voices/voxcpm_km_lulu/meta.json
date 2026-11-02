@@ -1,0 +1,12 @@
+{
+ "name": "VoxCPM 高棉语 · 噜噜参考音",
+ "desc": "微调模型 + 噜噜高棉语参考音续写，错字率 5.2%，声音偏硬，还在调。",
+ "tags": [
+  "高棉语"
+ ],
+ "author": "噜噜官方",
+ "main": "preset.json",
+ "sound": "sample.mp3",
+ "sample_text": "សួស្តី! តើអ្នកឈ្មោះអ្វី?",
+ "order": 2
+}

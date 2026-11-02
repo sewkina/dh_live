@@ -1,0 +1,12 @@
+{
+ "name": "VoxCPM 高棉语微调（默认声）",
+ "desc": "VoxCPM2 用高棉语数据全量微调 3000 步，错字率 3.6%，声音是模型默认女声。",
+ "tags": [
+  "高棉语"
+ ],
+ "author": "噜噜官方",
+ "main": "preset.json",
+ "sound": "sample.mp3",
+ "sample_text": "សួស្តី! តើអ្នកឈ្មោះអ្វី?",
+ "order": 1
+}

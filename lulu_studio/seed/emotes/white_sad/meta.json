@@ -1,0 +1,15 @@
+{
+ "name": "难过",
+ "desc": "白底大眼睛表情（当前噜噜在用的这套）",
+ "tags": [
+  "白底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "sad.eaf",
+ "preview": "preview.gif",
+ "emote": "sad",
+ "fps": 10,
+ "loop": true,
+ "sound": "sfx_sad.ogg",
+ "order": 13
+}

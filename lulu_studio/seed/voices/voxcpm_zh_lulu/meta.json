@@ -1,0 +1,12 @@
+{
+ "name": "VoxCPM 中文 · 噜噜音色",
+ "desc": "中文用噜噜参考音克隆（lulu_ref.wav）。",
+ "tags": [
+  "中文"
+ ],
+ "author": "噜噜官方",
+ "main": "preset.json",
+ "sound": "sample.mp3",
+ "sample_text": "你好呀，我是噜噜，今天想玩什么游戏？",
+ "order": 3
+}

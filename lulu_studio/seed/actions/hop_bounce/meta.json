@@ -1,0 +1,10 @@
+{
+ "name": "蹦一下",
+ "desc": "假装往上蹦一下",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "hop_bounce.json",
+ "order": 5
+}

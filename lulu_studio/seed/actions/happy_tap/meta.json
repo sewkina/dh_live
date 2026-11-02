@@ -1,0 +1,10 @@
+{
+ "name": "开心跺脚",
+ "desc": "前脚轮流点地，开心得跺脚",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "happy_tap.json",
+ "order": 3
+}
