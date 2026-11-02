@@ -1,0 +1,10 @@
+{
+ "name": "小兔扑",
+ "desc": "像小兔子一样往前扑",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "bunny_pounce.json",
+ "order": 6
+}

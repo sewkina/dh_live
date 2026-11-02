@@ -1,0 +1,10 @@
+{
+ "name": "趴下撒娇",
+ "desc": "趴下来扭一扭要抱抱",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "lie_cuddle.json",
+ "order": 10
+}

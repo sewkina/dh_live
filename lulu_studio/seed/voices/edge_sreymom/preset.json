@@ -1,0 +1,9 @@
+{
+ "provider": "lulu-backend TTS",
+ "config": {
+  "khmer_voice": "km-KH-SreymomNeural",
+  "voxcpm_khmer": false,
+  "hf_tts_url": ""
+ },
+ "sample_text": "ឆ្មាស្រែកថា មៀវ មៀវ។"
+}

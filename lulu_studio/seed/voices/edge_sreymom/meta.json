@@ -1,0 +1,12 @@
+{
+ "name": "Edge 高棉语女声 Sreymom",
+ "desc": "微软 Edge 免费高棉语女声，念得准、稳定，噜噜现在的保底声音。",
+ "tags": [
+  "高棉语"
+ ],
+ "author": "噜噜官方",
+ "main": "preset.json",
+ "sound": "sample.mp3",
+ "sample_text": "ឆ្មាស្រែកថា មៀវ មៀវ។",
+ "order": 0
+}

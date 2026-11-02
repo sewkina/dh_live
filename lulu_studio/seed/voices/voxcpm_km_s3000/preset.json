@@ -1,0 +1,8 @@
+{
+ "provider": "lulu-backend TTS",
+ "config": {
+  "voxcpm_khmer": true
+ },
+ "sample_text": "សួស្តី! តើអ្នកឈ្មោះអ្វី?",
+ "note": "高棉语走本机 VoxCPM 微调权重，默认声音"
+}

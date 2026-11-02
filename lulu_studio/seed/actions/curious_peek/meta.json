@@ -1,0 +1,10 @@
+{
+ "name": "好奇探头",
+ "desc": "往前探一探，好奇地看",
+ "tags": [
+  "呆萌"
+ ],
+ "author": "噜噜官方",
+ "main": "curious_peek.json",
+ "order": 2
+}

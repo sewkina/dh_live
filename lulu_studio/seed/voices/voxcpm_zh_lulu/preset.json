@@ -1,0 +1,8 @@
+{
+ "provider": "lulu-backend TTS",
+ "config": {
+  "voxcpm_url": "http://host.docker.internal:8808",
+  "voxcpm_reference_wav": "config/assets/lulu_voxcpm_ref.wav"
+ },
+ "sample_text": "你好呀，我是噜噜，今天想玩什么游戏？"
+}

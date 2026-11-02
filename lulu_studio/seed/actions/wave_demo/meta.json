@@ -1,0 +1,10 @@
+{
+ "name": "挥手",
+ "desc": "抬起前腿挥一挥打招呼",
+ "tags": [
+  "打招呼"
+ ],
+ "author": "噜噜官方",
+ "main": "wave_demo.json",
+ "order": 0
+}

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>噜噜工坊</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='10' width='52' height='44' rx='20' fill='%23fff6ea' stroke='%23e48b5a' stroke-width='4'/%3E%3Crect x='19' y='24' width='9' height='13' rx='4.5' fill='%23263048'/%3E%3Crect x='36' y='24' width='9' height='13' rx='4.5' fill='%23263048'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><i></i><i></i></span>
+    <div><h1>噜噜工坊</h1><p>给噜噜挑动作、表情和声音</p></div>
+  </div>
+  <div class="top-actions">
+    <button id="usbBtn" class="chip" hidden>连接噜噜</button>
+    <button id="settingsBtn" class="icon-btn" aria-label="设置">⚙</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="actions" class="on">动作</button>
+  <button role="tab" data-tab="emotes">表情</button>
+  <button role="tab" data-tab="voices">音色</button>
+  <button role="tab" data-tab="upload">上传</button>
+</nav>
+
+<main>
+  <section id="listView">
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="搜索名字、标签、作者">
+      <select id="sourceFilter" aria-label="来源">
+        <option value="">全部</option>
+        <option value="official">官方</option>
+        <option value="upload">大家上传的</option>
+      </select>
+      <a id="packBtn" class="btn ghost" href="#">全部打包下载</a>
+    </div>
+    <div id="tagChips" class="tag-chips" hidden></div>
+    <p id="tabHint" class="hint"></p>
+    <div id="grid" class="grid"></div>
+    <p id="empty" class="hint center" hidden>这里还没有东西。</p>
+  </section>
+
+  <section id="uploadView" hidden>
+    <form id="uploadForm" class="card form">
+      <h2>上传自己做的</h2>
+      <label>类型
+        <select name="type" id="upType">
+          <option value="actions">动作（.json）</option>
+          <option value="emotes">表情（.eaf）</option>
+          <option value="voices">音色（试听音频）</option>
+        </select>
+      </label>
+      <label>名字 <input name="name" required maxlength="40" placeholder="比如：转圈圈"></label>
+      <label>说明 <textarea name="desc" rows="2" maxlength="300" placeholder="做什么用、什么感觉"></textarea></label>
+      <div class="row2">
+        <label>作者 <input name="author" maxlength="40" placeholder="可不填"></label>
+        <label>标签 <input name="tags" maxlength="80" placeholder="用空格隔开"></label>
+      </div>
+      <div data-for="actions">
+        <label>动作文件 <input type="file" name="main" accept=".json,application/json"></label>
+        <p class="hint">和固件关键帧播放器同一种格式：最多 40 帧、小于 4000 字节，name 只能用英文、数字、下划线。Blender 插件“导出动作 JSON”得到的文件可以直接传。</p>
+      </div>
+      <div data-for="emotes" hidden>
+        <label>表情文件 <input type="file" name="main" accept=".eaf"></label>
+        <div class="row2">
+          <label>对应表情名 <input name="emote" maxlength="24" placeholder="如 happy，可不填"></label>
+          <label>帧率 <input name="fps" type="number" min="1" max="30" value="10"></label>
+        </div>
+        <label>预览图（可不传，会自动生成） <input type="file" name="preview" accept=".gif,.png,.webp"></label>
+        <label>配套音效（可选） <input type="file" name="sound" accept=".ogg,.mp3,.wav"></label>
+      </div>
+      <div data-for="voices" hidden>
+        <label>试听音频 <input type="file" name="sound" accept=".mp3,.ogg,.wav,.m4a,.opus"></label>
+        <label>试听的这句话 <input name="sample_text" maxlength="300" placeholder="音频里说的内容"></label>
+        <label>音色配置（可选，JSON） <input type="file" name="main" accept=".json,application/json"></label>
+      </div>
+      <button class="btn primary" type="submit">上传</button>
+      <p id="upMsg" class="hint" role="status"></p>
+    </form>
+  </section>
+</main>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-body" role="dialog" aria-modal="true">
+    <button class="icon-btn close" data-close aria-label="关闭">✕</button>
+    <div id="sheetContent"></div>
+  </div>
+</div>
+
+<div id="settings" class="sheet" hidden>
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-body" role="dialog" aria-modal="true">
+    <button class="icon-btn close" data-close aria-label="关闭">✕</button>
+    <h2>设置</h2>
+    <label>上传口令 <input id="tokenInput" type="password" autocomplete="off" placeholder="电脑上 LULU_STUDIO_TOKEN 设的口令"></label>
+    <p id="tokenHint" class="hint"></p>
+    <button id="saveToken" class="btn primary">保存</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="lulu_serial.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

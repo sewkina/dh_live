@@ -1,0 +1,15 @@
+{
+ "name": "困了",
+ "desc": "白底大眼睛表情（噜噜固件里现在刷的这套）",
+ "tags": [
+  "白底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "sleepy.eaf",
+ "preview": "preview.gif",
+ "emote": "sleepy",
+ "fps": 10,
+ "loop": true,
+ "sound": "sfx_sleepy.ogg",
+ "order": 16
+}

@@ -1,0 +1,15 @@
+{
+ "name": "唱歌",
+ "desc": "白底大眼睛表情（噜噜固件里现在刷的这套）",
+ "tags": [
+  "白底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "sing.eaf",
+ "preview": "preview.gif",
+ "emote": "sing",
+ "fps": 15,
+ "loop": true,
+ "sound": "sfx_sing.ogg",
+ "order": 12
+}

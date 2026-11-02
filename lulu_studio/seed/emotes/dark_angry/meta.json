@@ -1,0 +1,15 @@
+{
+ "name": "生气",
+ "desc": "黑底大眼睛表情（宣传片和 3D 用的这套，眼睛外有情绪色光晕）",
+ "tags": [
+  "黑底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "angry.eaf",
+ "preview": "preview.gif",
+ "emote": "angry",
+ "fps": 15,
+ "loop": true,
+ "sound": "sfx_angry.ogg",
+ "order": -86
+}
