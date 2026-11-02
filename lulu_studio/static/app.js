@@ -186,7 +186,7 @@
   // ---------------------------------------------------------------- 列表
   const TAB_HINT = {
     actions: '点开可以看动画预览、下载 JSON。电脑上用 Chrome 插 USB 连上噜噜后，可以一键装进噜噜，装好后大模型就能按动作名叫它做。',
-    emotes: '噜噜屏幕上的表情（240×240 圆屏）。点开可以听配套音效、下载 .eaf。换进噜噜需要重新烧录资源分区。',
+    emotes: '噜噜屏幕上的表情（240×240 圆屏），黑底和白底两套。点开可以听配套音效、下载 .eaf。换进噜噜需要重新烧录资源分区。',
     voices: '噜噜说话的声音。点 ▶ 试听，下载里有试听音频和后端配置片段。',
   };
   let tab = 'actions';
@@ -203,10 +203,22 @@
     render();
   }
 
+  let tagFilter = '';
+  function renderTagChips() {
+    const box = $('#tagChips');
+    const counts = {};
+    items.forEach((i) => i.tags.forEach((t) => { counts[t] = (counts[t] || 0) + 1; }));
+    const tags = Object.keys(counts).filter((t) => counts[t] > 1 && counts[t] < items.length).slice(0, 8);
+    if (tagFilter && !tags.includes(tagFilter)) tags.unshift(tagFilter);
+    box.hidden = tags.length === 0;
+    box.innerHTML = ['', ...tags].map((t) => `<button class="chip${t === tagFilter ? ' on' : ''}" data-tag="${esc(t)}">${t ? '#' + esc(t) : '全部'}</button>`).join('');
+    $$('[data-tag]', box).forEach((b) => b.addEventListener('click', () => { tagFilter = b.dataset.tag; render(); }));
+  }
+
   function filtered() {
     const q = $('#search').value.trim().toLowerCase();
     const src = $('#sourceFilter').value;
-    return items.filter((i) => (!src || i.source === src) &&
+    return items.filter((i) => (!src || i.source === src) && (!tagFilter || i.tags.includes(tagFilter)) &&
       (!q || (i.name + i.desc + i.id + i.author + i.tags.join(' ')).toLowerCase().includes(q)));
   }
 
@@ -228,7 +240,14 @@
     $('#empty').hidden = list.length > 0;
     $('#tabHint').textContent = TAB_HINT[tab] || '';
     const pack = $('#packBtn');
-    pack.onclick = (e) => { e.preventDefault(); download('/api/pack/' + tab + '.zip', 'lulu_' + tab + '_pack.zip'); };
+    pack.textContent = list.length === items.length ? '全部打包下载' : '打包下载这 ' + list.length + ' 个';
+    pack.onclick = (e) => {
+      e.preventDefault();
+      if (!list.length) return;
+      const ids = list.length === items.length ? '' : '?ids=' + encodeURIComponent(list.map((i) => i.id).join(','));
+      download('/api/pack/' + tab + '.zip' + ids, 'lulu_' + tab + '_pack.zip');
+    };
+    renderTagChips();
     for (const it of list) {
       const card = document.createElement('div');
       card.className = 'card item';
@@ -415,6 +434,7 @@
   // ---------------------------------------------------------------- 切换分类
   function switchTab(t) {
     tab = t;
+    tagFilter = '';
     $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     $('#listView').hidden = t === 'upload';
     $('#uploadView').hidden = t !== 'upload';

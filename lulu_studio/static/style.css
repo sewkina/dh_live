@@ -117,3 +117,5 @@ pre { background: var(--card); border: 1px solid var(--line); border-radius: 12p
   .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .tabs button { padding: 7px 12px; }
 }
+.tag-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 0; }
+.tag-chips .chip.on { background: var(--ink); color: var(--bg); }

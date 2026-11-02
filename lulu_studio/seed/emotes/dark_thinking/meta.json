@@ -1,0 +1,15 @@
+{
+ "name": "思考",
+ "desc": "黑底大眼睛表情（宣传片和 3D 用的这套，眼睛外有情绪色光晕）",
+ "tags": [
+  "黑底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "thinking.eaf",
+ "preview": "preview.gif",
+ "emote": "thinking",
+ "fps": 10,
+ "loop": true,
+ "sound": "sfx_thinking.ogg",
+ "order": -98
+}

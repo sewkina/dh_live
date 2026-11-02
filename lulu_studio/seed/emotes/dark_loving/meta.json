@@ -1,0 +1,15 @@
+{
+ "name": "喜欢你",
+ "desc": "黑底大眼睛表情（宣传片和 3D 用的这套，眼睛外有情绪色光晕）",
+ "tags": [
+  "黑底大眼"
+ ],
+ "author": "噜噜官方",
+ "main": "loving.eaf",
+ "preview": "preview.gif",
+ "emote": "loving",
+ "fps": 15,
+ "loop": true,
+ "sound": "sfx_loving.ogg",
+ "order": -94
+}

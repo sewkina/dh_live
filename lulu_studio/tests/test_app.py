@@ -22,7 +22,7 @@ GOOD = {"name": "spin_test", "interp": "spline", "frames": [{"d": 300, "p": [-60
 
 
 def test_seed_lists():
-    for kind, n in (("actions", 11), ("emotes", 18), ("voices", 4)):
+    for kind, n in (("actions", 11), ("emotes", 36), ("voices", 4)):
         r = c.get("/api/items", params={"type": kind})
         assert r.status_code == 200 and len(r.json()) >= n
 
@@ -95,3 +95,12 @@ def test_no_path_escape():
 def test_static_index():
     r = c.get("/")
     assert r.status_code == 200 and "噜噜工坊" in r.text
+
+
+def test_pack_subset():
+    import io, zipfile
+    r = c.get("/api/pack/emotes.zip", params={"ids": "dark_happy,dark_sad"})
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = z.namelist()
+    assert "dark_happy/happy.eaf" in names and not any(n.startswith("white_") for n in names)
+    assert len(json.loads(z.read("emote_list.json"))) == 2
