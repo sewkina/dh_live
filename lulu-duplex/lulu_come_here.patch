@@ -1,0 +1,282 @@
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index 0874d17..512ab03 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -267,3 +267,14 @@ config RECEIVE_CUSTOM_MESSAGE
+ 
+ 
+ endmenu
++
++menu "Lulu come-here (face follow)"
++    config LULU_FACE_TURN_SIGN
++        int "Turn direction sign (1 or -1; flip if Lulu turns away from the face)"
++        default 1
++        range -1 1
++    config LULU_FACE_NEAR_PX
++        int "Stop when face box is at least this wide (pixels, 240px frame)"
++        default 80
++        range 30 200
++endmenu
+diff --git a/main/boards/puppy/face_follow.cc b/main/boards/puppy/face_follow.cc
+new file mode 100644
+index 0000000..4674abd
+--- /dev/null
++++ b/main/boards/puppy/face_follow.cc
+@@ -0,0 +1,177 @@
++// 噜噜“过来”：人脸检测（esp-dl human_face_detect，芯片上运行）+ 转向 + 前进。
++// 隐私：只在内存里看一帧算人脸框，用完立刻还回去，不编码、不上传、不存盘，日志只记框的位置和大小。
++#include "face_follow.h"
++
++#include <atomic>
++#include <cmath>
++#include <cstring>
++#include <esp_camera.h>
++#include <esp_heap_caps.h>
++#include <esp_log.h>
++#include <esp_timer.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/task.h>
++#include <sdkconfig.h>
++
++#include "human_face_detect.hpp"
++
++#define TAG "FaceFollow"
++
++#ifndef CONFIG_LULU_FACE_TURN_SIGN
++#define CONFIG_LULU_FACE_TURN_SIGN 1
++#endif
++#ifndef CONFIG_LULU_FACE_NEAR_PX
++#define CONFIG_LULU_FACE_NEAR_PX 80
++#endif
++
++namespace face_follow {
++namespace {
++
++std::atomic<bool> g_running{false};
++std::atomic<bool> g_stop{false};
++MoveFn g_move;
++DoneFn g_done;
++HumanFaceDetect* g_detector = nullptr;
++uint8_t* g_rgb = nullptr;  // 240x240 RGB888，PSRAM
++
++struct Face {
++    bool ok = false;
++    float cx = 0;  // -1（最左）.. +1（最右）
++    int w = 0;     // 人脸框宽度（像素）
++};
++
++// 取一帧最新画面，找最大的人脸
++Face Look() {
++    Face f;
++    // 先丢掉一帧旧的，保证是现在的画面
++    camera_fb_t* fb = esp_camera_fb_get();
++    if (fb) esp_camera_fb_return(fb);
++    fb = esp_camera_fb_get();
++    if (!fb) {
++        ESP_LOGW(TAG, "取帧失败");
++        return f;
++    }
++    const int W = fb->width, H = fb->height;
++    if (fb->format != PIXFORMAT_RGB565 || W * H > 320 * 320) {
++        esp_camera_fb_return(fb);
++        ESP_LOGW(TAG, "不支持的画面格式 %d %dx%d", fb->format, W, H);
++        return f;
++    }
++    if (!g_rgb) {
++        g_rgb = (uint8_t*)heap_caps_malloc(320 * 320 * 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++        if (!g_rgb) {
++            esp_camera_fb_return(fb);
++            return f;
++        }
++    }
++    // esp32-camera 的 RGB565 是高字节在前
++    const uint8_t* s = fb->buf;
++    uint8_t* d = g_rgb;
++    for (int i = 0; i < W * H; i++) {
++        uint16_t p = (uint16_t(s[2 * i]) << 8) | s[2 * i + 1];
++        d[3 * i + 0] = ((p >> 11) & 0x1f) << 3;
++        d[3 * i + 1] = ((p >> 5) & 0x3f) << 2;
++        d[3 * i + 2] = (p & 0x1f) << 3;
++    }
++    esp_camera_fb_return(fb);  // 原始帧立刻还回去
++
++    dl::image::img_t img;
++    img.data = g_rgb;
++    img.width = (uint16_t)W;
++    img.height = (uint16_t)H;
++    img.pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB888;
++    auto& results = g_detector->run(img);
++
++    int best_w = 0;
++    for (auto& r : results) {
++        if (r.box.size() < 4) continue;
++        int w = r.box[2] - r.box[0];
++        if (w > best_w) {
++            best_w = w;
++            f.ok = true;
++            f.w = w;
++            f.cx = ((r.box[0] + r.box[2]) / 2.0f - W / 2.0f) / (W / 2.0f);
++        }
++    }
++    memset(g_rgb, 0, W * H * 3);  // 用完清掉
++    if (f.ok) ESP_LOGI(TAG, "看到人脸 cx=%.2f w=%d", f.cx, f.w);
++    return f;
++}
++
++void Move(int vx, int vyaw, int ms) {
++    if (!g_stop && g_move) g_move(vx, vyaw, ms);
++}
++
++// 画面里人在右边 → 向右转（vyaw 负）；装反了用 Kconfig 的 LULU_FACE_TURN_SIGN=-1
++int TurnToward(float cx) {
++    int sign = CONFIG_LULU_FACE_TURN_SIGN;
++    int v = (int)(-sign * 45 * (cx > 0 ? 1 : -1));
++    int ms = (int)(150 + 350 * std::fabs(cx));
++    Move(0, v, ms);
++    return ms;
++}
++
++void Task(void*) {
++    bool found_once = false;
++    bool reached = false;
++    int lost = 0;
++    int search_steps = 0;
++    const int64_t deadline = esp_timer_get_time() + 25 * 1000 * 1000;  // 最多 25 秒
++
++    while (!g_stop && esp_timer_get_time() < deadline) {
++        vTaskDelay(pdMS_TO_TICKS(250));  // 停稳再看，画面不糊
++        Face f = Look();
++        if (!f.ok) {
++            if (found_once && ++lost <= 2) continue;  // 刚刚还看得到，再看两眼
++            if (++search_steps > 8) break;           // 转了一整圈也没找到
++            Move(0, 50, 600);                         // 原地左转约 45 度继续找
++            continue;
++        }
++        found_once = true;
++        lost = 0;
++        if (f.w >= CONFIG_LULU_FACE_NEAR_PX) {  // 够近了
++            reached = true;
++            break;
++        }
++        if (std::fabs(f.cx) > 0.25f) {
++            TurnToward(f.cx);
++            continue;
++        }
++        // 对正了，往前小跑；离得越远跑得越久
++        int ms = f.w < 40 ? 1500 : 800;
++        Move(60, 0, ms);
++    }
++    if (g_move) g_move(0, 0, 0);  // 停下
++    ESP_LOGI(TAG, "找人结束：%s", reached ? "到了" : (found_once ? "看到过但没走到" : "没找到"));
++    bool ok = reached || found_once;
++    g_running = false;
++    if (g_done && !g_stop) g_done(ok);
++    vTaskDelete(nullptr);
++}
++
++}  // namespace
++
++bool Start(MoveFn move, DoneFn done) {
++    bool expected = false;
++    if (!g_running.compare_exchange_strong(expected, true)) return false;
++    if (!g_detector) {
++        g_detector = new HumanFaceDetect();
++        if (!g_detector) {
++            g_running = false;
++            return false;
++        }
++    }
++    g_move = std::move(move);
++    g_done = std::move(done);
++    g_stop = false;
++    if (xTaskCreatePinnedToCore(Task, "face_follow", 8192, nullptr, 3, nullptr, 1) != pdPASS) {
++        g_running = false;
++        return false;
++    }
++    return true;
++}
++
++void Stop() { g_stop = true; }
++bool Running() { return g_running; }
++
++}  // namespace face_follow
+diff --git a/main/boards/puppy/face_follow.h b/main/boards/puppy/face_follow.h
+new file mode 100644
+index 0000000..e2096d0
+--- /dev/null
++++ b/main/boards/puppy/face_follow.h
+@@ -0,0 +1,17 @@
++// 噜噜“过来”：在芯片上用人脸检测找人、转向、走过去。照片不出设备、不存盘。
++#pragma once
++#include <functional>
++
++namespace face_follow {
++
++// move(vx, vyaw, ms)：vx 前正后负，vyaw 左转正（与 self.dog.move 相同约定），阻塞 ms 毫秒后停下
++using MoveFn = std::function<void(int vx, int vyaw, int ms)>;
++using DoneFn = std::function<void(bool found)>;
++
++// 后台开始找人；已经在找时返回 false
++bool Start(MoveFn move, DoneFn done);
++// 立即停下（例如打断、开始别的动作时）
++void Stop();
++bool Running();
++
++}  // namespace face_follow
+diff --git a/main/boards/puppy/puppy_board.cc b/main/boards/puppy/puppy_board.cc
+index cf52856..c62fffa 100644
+--- a/main/boards/puppy/puppy_board.cc
++++ b/main/boards/puppy/puppy_board.cc
+@@ -29,6 +29,7 @@
+ #include "robot.h"
+ #include "robot_action.h"
+ #include "imu.h"
++#include "face_follow.h"
+ 
+ #define TAG "PUPPY"
+ 
+@@ -360,10 +361,29 @@ private:
+                 int dog_vx = properties["dog_vx"].value<int>();
+                 int dog_vyaw = properties["dog_vyaw"].value<int>();
+                 int time = properties["time"].value<int>();
++                face_follow::Stop();
+                 SetDogSpeed(dog_vx, dog_vyaw, time);
+                 return true;
+             });
+ 
++        mcp_server.AddTool("self.dog.come_here",
++            "小朋友叫你“过来/来这里/come here”时调用：噜噜用摄像头在芯片上找人脸（画面不上传、不保存），转向对方并走过去，"
++            "找不到会原地转一圈看看。调用后马上返回，你可以先说一句“我来啦”。 / Find the person's face on-device and walk to them.",
++            PropertyList(std::vector<Property>{}),
++            [this](const PropertyList& properties) -> ReturnValue {
++                if (camera_ == nullptr) {
++                    SetDogSpeed(60, 0, 1500);  // 没有摄像头：往前小跑几步
++                    Action_ID = Wave_ID;
++                    return "没有摄像头，只往前走了几步";
++                }
++                bool ok = face_follow::Start(
++                    [this](int vx, int vyaw, int ms) { SetDogSpeed(vx, vyaw, ms); },
++                    [](bool found) {
++                        if (found) Action_ID = Wave_ID;  // 走到了就打个招呼
++                    });
++                return ok ? std::string("开始找人") : std::string("已经在找人了");
++            });
++
+         mcp_server.AddTool("self.dog.calibrate",
+             "标定机器狗,1为进入标定,0为退出/完成标定",
+             PropertyList({
+diff --git a/main/idf_component.yml b/main/idf_component.yml
+index 2447607..f4e8075 100644
+--- a/main/idf_component.yml
++++ b/main/idf_component.yml
+@@ -37,6 +37,10 @@ dependencies:
+     version: ^2.1.4
+     rules:
+     - if: target in [esp32s3]
++  espressif/human_face_detect:
++    version: "*"
++    rules:
++    - if: target in [esp32s3]
+   espressif/esp_video:
+     version: ==1.3.1   # for compatibility. update version may need to modify this project code.
+     rules:
