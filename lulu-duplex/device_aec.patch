@@ -1,0 +1,240 @@
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index f7f7ef4..0874d17 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -198,6 +198,23 @@ config USE_AUDIO_PROCESSOR
+     help
+         Requires ESP32 S3 and PSRAM
+ 
++config USE_DEVICE_AEC
++    bool "Enable Device-Side AEC (software loopback reference)"
++    default n
++    depends on USE_AUDIO_PROCESSOR
++    help
++        Device-side echo cancellation for boards without a hardware reference
++        channel (e.g. NoAudioCodecSimplex). Speaker data is fed back as the
++        AFE reference channel so the mic can stay open while speaking (barge-in).
++
++config DEVICE_AEC_REF_LEAD_MS
++    int "Reference lead (ms) for software loopback AEC"
++    default 0
++    range -60 60
++    depends on USE_DEVICE_AEC
++    help
++        Positive values feed speaker data earlier than the mic block.
++
+ config USE_SERVER_AEC
+     bool "Enable Server-Side AEC (Unstable)"
+     default n
+diff --git a/main/application.cc b/main/application.cc
+index 5b8dbb8..6e3ef6e 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -58,6 +58,12 @@ Application::Application() {
+         int saved_mode = settings.GetInt("aec_mode", -1);
+         if (saved_mode >= kAecOff && saved_mode <= kAecOnServerSide) {
+             aec_mode_ = static_cast<AecMode>(saved_mode);
++#if CONFIG_USE_DEVICE_AEC
++            // 设备端 AEC 固件：旧的“服务器 AEC”设置当作设备端 AEC
++            if (aec_mode_ == kAecOnServerSide) {
++                aec_mode_ = kAecOnDeviceSide;
++            }
++#endif
+         } else {
+             aec_mode_ = compile_default;
+         }
+@@ -594,6 +600,15 @@ void Application::InitializeProtocol() {
+                         }
+                     }
+                 });
++            } else if (strcmp(state->valuestring, "abort") == 0) {
++                // 被打断（服务器判定孩子插话）：立刻清掉已缓存还没播的声音，转去听
++                Schedule([this]() {
++                    if (GetDeviceState() == kDeviceStateSpeaking) {
++                        ESP_LOGI(TAG, "Barge-in: drop queued speech");
++                        audio_service_.ResetDecoder();
++                        SetDeviceState(kDeviceStateListening);
++                    }
++                });
+             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
+                 auto text = cJSON_GetObjectItem(root, "text");
+                 if (cJSON_IsString(text)) {
+diff --git a/main/audio/codecs/no_audio_codec.cc b/main/audio/codecs/no_audio_codec.cc
+index 6d73e68..989bf1c 100644
+--- a/main/audio/codecs/no_audio_codec.cc
++++ b/main/audio/codecs/no_audio_codec.cc
+@@ -3,10 +3,82 @@
+ #include <esp_log.h>
+ #include <cmath>
+ #include <cstring>
++#include <esp_timer.h>
++#include <esp_heap_caps.h>
++#include <sdkconfig.h>
++
++#define REF_RING_SAMPLES 16384  // 约 1 秒 @16k
+ 
+ #define TAG "NoAudioCodec"
+ 
++void NoAudioCodec::EnableSoftwareReference(int lead_ms) {
++    if (input_sample_rate_ != 16000 || output_sample_rate_ != 16000) {
++        ESP_LOGE(TAG, "Software AEC reference needs 16k in/out (in=%d out=%d)", input_sample_rate_, output_sample_rate_);
++        return;
++    }
++    ref_ring_ = (int16_t*)heap_caps_calloc(REF_RING_SAMPLES, sizeof(int16_t), MALLOC_CAP_SPIRAM);
++    ref_tag_ = (uint32_t*)heap_caps_calloc(REF_RING_SAMPLES, sizeof(uint32_t), MALLOC_CAP_SPIRAM);
++    if (ref_ring_ == nullptr || ref_tag_ == nullptr) {
++        ESP_LOGE(TAG, "Software AEC reference: no memory");
++        return;
++    }
++    ref_lead_samples_ = lead_ms * 16;
++    soft_ref_ = true;
++    input_reference_ = true;
++    input_channels_ = 2;
++    ESP_LOGI(TAG, "Software AEC reference enabled, lead %d ms", lead_ms);
++}
++
++uint32_t NoAudioCodec::NowK() const {
++    return (uint32_t)(esp_timer_get_time() * 16 / 1000);  // 16k 采样点编号
++}
++
++void NoAudioCodec::OutputData(std::vector<int16_t>& data) {
++    if (soft_ref_ && !data.empty()) {
++        // 在写入 DMA 之前记下时间：喇叭空闲时这段从“现在”开始播，连续播放时接在上一段后面
++        int32_t vol = output_volume_ * output_volume_;  // 0..10000，与 Write 里的平方音量曲线一致
++        std::lock_guard<std::mutex> lock(ref_mutex_);
++        uint32_t now_k = NowK();
++        uint32_t start = ((int32_t)(ref_next_k_ - now_k) > 0) ? ref_next_k_ : now_k;
++        for (size_t i = 0; i < data.size(); i++) {
++            uint32_t k = start + i;
++            int32_t v = (int32_t)data[i] * vol / 10000;
++            ref_ring_[k % REF_RING_SAMPLES] = (int16_t)v;
++            ref_tag_[k % REF_RING_SAMPLES] = k;
++        }
++        ref_next_k_ = start + data.size();
++    }
++    Write(data.data(), data.size());
++}
++
++bool NoAudioCodec::InputData(std::vector<int16_t>& data) {
++    if (!soft_ref_) {
++        return AudioCodec::InputData(data);
++    }
++    int frames = data.size() / 2;
++    mic_tmp_.resize(frames);
++    int got = Read(mic_tmp_.data(), frames);
++    if (got <= 0) {
++        return false;
++    }
++    std::lock_guard<std::mutex> lock(ref_mutex_);
++    // 这块麦克风数据大约在 [now-got, now) 录到，取同一时间段的喇叭数据作参考
++    uint32_t k0 = NowK() - got + ref_lead_samples_;
++    for (int i = 0; i < got; i++) {
++        uint32_t k = k0 + i;
++        uint32_t idx = k % REF_RING_SAMPLES;
++        data[2 * i] = mic_tmp_[i];
++        data[2 * i + 1] = (ref_tag_[idx] == k) ? ref_ring_[idx] : 0;
++    }
++    if (got < frames) {
++        data.resize(got * 2);
++    }
++    return true;
++}
++
+ NoAudioCodec::~NoAudioCodec() {
++    if (ref_ring_) heap_caps_free(ref_ring_);
++    if (ref_tag_) heap_caps_free(ref_tag_);
+     if (rx_handle_ != nullptr) {
+         ESP_ERROR_CHECK(i2s_channel_disable(rx_handle_));
+     }
+@@ -142,6 +214,9 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
+     std_cfg.gpio_cfg.din = mic_din;
+     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &std_cfg));
+     ESP_LOGI(TAG, "Simplex channels created");
++#if CONFIG_USE_DEVICE_AEC
++    EnableSoftwareReference(CONFIG_DEVICE_AEC_REF_LEAD_MS);
++#endif
+ }
+ 
+ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask){
+@@ -212,6 +287,9 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
+     std_cfg.gpio_cfg.din = mic_din;
+     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &std_cfg));
+     ESP_LOGI(TAG, "Simplex channels created");
++#if CONFIG_USE_DEVICE_AEC
++    EnableSoftwareReference(CONFIG_DEVICE_AEC_REF_LEAD_MS);
++#endif
+ }
+ 
+ int NoAudioCodec::Write(const int16_t* data, int samples) {
+@@ -378,6 +456,9 @@ NoAudioCodecSimplexPdm::NoAudioCodecSimplexPdm(int input_sample_rate, int output
+     ESP_LOGE(TAG, "PDM is not supported");
+ #endif
+     ESP_LOGI(TAG, "Simplex channels created");
++#if CONFIG_USE_DEVICE_AEC
++    EnableSoftwareReference(CONFIG_DEVICE_AEC_REF_LEAD_MS);
++#endif
+ }
+ 
+ int NoAudioCodecSimplexPdm::Read(int16_t* dest, int samples) {
+diff --git a/main/audio/codecs/no_audio_codec.h b/main/audio/codecs/no_audio_codec.h
+index dec803f..9835f44 100644
+--- a/main/audio/codecs/no_audio_codec.h
++++ b/main/audio/codecs/no_audio_codec.h
+@@ -6,11 +6,27 @@
+ #include <driver/gpio.h>
+ #include <driver/i2s_pdm.h>
+ #include <mutex>
++#include <cstdint>
+ 
+ class NoAudioCodec : public AudioCodec {
+ protected:
+     std::mutex data_if_mutex_;
+ 
++    // ---- 软件回采参考（设备端回声消除用）----
++    // 没有硬件回采通道时，把送给喇叭的数据按“预计播放时间”记在一条时间轴上，
++    // 读麦克风时取同一时刻的数据作为参考通道，输出 [麦克风, 参考] 交错两通道。
++    std::mutex ref_mutex_;
++    bool soft_ref_ = false;
++    int16_t* ref_ring_ = nullptr;     // 按 16k 采样点编号的环形时间轴
++    uint32_t* ref_tag_ = nullptr;     // 每个格子对应的绝对采样编号，用来判断是否过期
++    uint32_t ref_next_k_ = 0;         // 下一段喇叭数据的预计开始编号
++    int ref_lead_samples_ = 0;        // 参考比麦克风提前多少个采样点（可为负）
++    std::vector<int16_t> mic_tmp_;
++    void EnableSoftwareReference(int lead_ms);
++    uint32_t NowK() const;
++    virtual void OutputData(std::vector<int16_t>& data) override;
++    virtual bool InputData(std::vector<int16_t>& data) override;
++
+     virtual int Write(const int16_t* data, int samples) override;
+     virtual int Read(int16_t* dest, int samples) override;
+     virtual void EnableInput(bool enable) override;
+diff --git a/main/mcp_server.cc b/main/mcp_server.cc
+index 91a34c0..dc52b7a 100644
+--- a/main/mcp_server.cc
++++ b/main/mcp_server.cc
+@@ -277,7 +277,11 @@ void McpServer::AddUserOnlyTools() {
+         [this](const PropertyList& properties) -> ReturnValue {
+             auto& app = Application::GetInstance();
+             int enable = properties["enable"].value<int>();
++#if CONFIG_USE_DEVICE_AEC
++            AecMode mode = enable ? kAecOnDeviceSide : kAecOff;
++#else
+             AecMode mode = enable ? kAecOnServerSide : kAecOff;
++#endif
+             app.SetAecMode(mode);
+             return std::string(enable ? "AEC enabled" : "AEC disabled");
+         });
+diff --git a/main/protocols/websocket_protocol.cc b/main/protocols/websocket_protocol.cc
+index 550fbe7..9a742f9 100644
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -208,6 +208,9 @@ std::string WebsocketProtocol::GetHelloMessage() {
+     cJSON* features = cJSON_CreateObject();
+     if (Application::GetInstance().GetAecMode() == kAecOnServerSide) {
+         cJSON_AddBoolToObject(features, "aec", true);
++    } else if (Application::GetInstance().GetAecMode() == kAecOnDeviceSide) {
++        // 设备端已做回声消除：告诉服务器可以边说边听、支持打断
++        cJSON_AddBoolToObject(features, "device_aec", true);
+     }
+     cJSON_AddBoolToObject(features, "mcp", true);
+     cJSON_AddItemToObject(root, "features", features);
