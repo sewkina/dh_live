@@ -2,17 +2,18 @@
 
 固件开了设备端 AEC 时，hello 里会带 features.device_aec=true，并且噜噜说话时麦克风不关
 （realtime 聆听）。上游只在“服务器 AEC”时才打断，这里给 device_aec 的连接加上打断：
-- 复用 lulu_bargein.BargeInDetector：TTS 开头 grace_ms 内不打断，连续人声 ≥ min_voice_ms 才打断；
+- 复用 lulu_bargein.BargeInDetector：第一段语音发出后 grace_ms(默认800) 内不打断，连续人声 ≥ min_voice_ms(默认400) 才打断；
 - 打断时先发 {"type":"tts","state":"abort"}，固件收到后立刻清掉缓存的语音，
   再走上游 handleAbortMessage（停 LLM/TTS、发 tts stop）。
 日志只记“打断”事件，不记音频或文字。
 配置（data/.config.yaml，可选）：
-  lulu_bargein: {min_voice_ms: 300, grace_ms: 400, max_gap_ms: 120}
+  lulu_bargein: {min_voice_ms: 400, grace_ms: 800, max_gap_ms: 120}
 关掉：环境变量 LULU_DISABLE_DUPLEX=1
 """
 
 import json
 import os
+import time
 
 TAG = "lulu_duplex"
 
@@ -59,7 +60,18 @@ def install():
     abortHandle.handleAbortMessage = abort_with_flush
     rah.handleAbortMessage = abort_with_flush
 
-    # 3) device_aec 连接：说话中检测到持续人声就打断
+    # 3) 记下“第一段语音真正发给噜噜”的时间。上游在识别出孩子的话时就把
+    #    client_is_speaking 设成 True（那时还在等大模型和合成），不能从那时起算打断。
+    from core.handle import sendAudioHandle as sah
+    orig_send = getattr(sah, "_do_send_audio", None)
+    if orig_send is not None:
+        async def do_send_audio(conn, *a, **kw):
+            if getattr(conn, "_lulu_audio_t", None) is None:
+                conn._lulu_audio_t = time.time()
+            return await orig_send(conn, *a, **kw)
+        sah._do_send_audio = do_send_audio
+
+    # 4) device_aec 连接：噜噜真的在出声时，检测到持续人声就打断
     orig_handle = rah.handleAudioMessage
 
     async def handle_audio(conn, pcm_frame):
@@ -67,10 +79,17 @@ def install():
             return await orig_handle(conn, pcm_frame)
         conn._lulu_last_vad = False
         speaking = bool(getattr(conn, "client_is_speaking", False))
+        if not speaking:
+            conn._lulu_audio_t = None
+        elif orig_send is not None:
+            speaking = getattr(conn, "_lulu_audio_t", None) is not None
         await orig_handle(conn, pcm_frame)
         det = getattr(conn, "_lulu_bargein", None)
         if det is None:
-            det = BargeInDetector.from_config(getattr(conn, "config", {}))
+            cfg = dict((getattr(conn, "config", {}) or {}).get("lulu_bargein", {}) or {})
+            cfg.setdefault("grace_ms", 800)
+            cfg.setdefault("min_voice_ms", 400)
+            det = BargeInDetector.from_config({"lulu_bargein": cfg})
             conn._lulu_bargein = det
         if det.update(speaking and getattr(conn, "client_listen_mode", "") != "manual",
                       conn._lulu_last_vad):
