@@ -1,0 +1,21 @@
+diff --cc main/Kconfig.projbuild
+index 0874d17,98209a9..0000000
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@@ -215,6 -215,13 +215,16 @@@ config DEVICE_AEC_REF_LEAD_M
+      help
+          Positive values feed speaker data earlier than the mic block.
+  
+++<<<<<<< Updated upstream
+++=======
++ config DEVICE_AEC_LOW_COST
++     bool "Low-cost AFE for device-side AEC"
++     default y
++     depends on USE_DEVICE_AEC
++     help
++         Use AEC_MODE_VOIP_LOW_COST + WebRTC NS to save CPU while playing.
++ 
+++>>>>>>> Stashed changes
+  config USE_SERVER_AEC
+      bool "Enable Server-Side AEC (Unstable)"
+      default n
