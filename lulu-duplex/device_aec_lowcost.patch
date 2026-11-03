@@ -1,21 +1,51 @@
-diff --cc main/Kconfig.projbuild
-index 0874d17,98209a9..0000000
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index 0874d17..98209a9 100644
 --- a/main/Kconfig.projbuild
 +++ b/main/Kconfig.projbuild
-@@@ -215,6 -215,13 +215,16 @@@ config DEVICE_AEC_REF_LEAD_M
-      help
-          Positive values feed speaker data earlier than the mic block.
-  
-++<<<<<<< Updated upstream
-++=======
-+ config DEVICE_AEC_LOW_COST
-+     bool "Low-cost AFE for device-side AEC"
-+     default y
-+     depends on USE_DEVICE_AEC
-+     help
-+         Use AEC_MODE_VOIP_LOW_COST + WebRTC NS to save CPU while playing.
-+ 
-++>>>>>>> Stashed changes
-  config USE_SERVER_AEC
-      bool "Enable Server-Side AEC (Unstable)"
-      default n
+@@ -215,6 +215,13 @@ config DEVICE_AEC_REF_LEAD_MS
+     help
+         Positive values feed speaker data earlier than the mic block.
+ 
++config DEVICE_AEC_LOW_COST
++    bool "Low-cost AFE for device-side AEC"
++    default y
++    depends on USE_DEVICE_AEC
++    help
++        Use AEC_MODE_VOIP_LOW_COST + WebRTC NS to save CPU while playing.
++
+ config USE_SERVER_AEC
+     bool "Enable Server-Side AEC (Unstable)"
+     default n
+diff --git a/main/audio/processors/afe_audio_processor.cc b/main/audio/processors/afe_audio_processor.cc
+index 5f13205..e0e18cc 100644
+--- a/main/audio/processors/afe_audio_processor.cc
++++ b/main/audio/processors/afe_audio_processor.cc
+@@ -37,8 +37,15 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
+     char* ns_model_name = esp_srmodel_filter(models, ESP_NSNET_PREFIX, NULL);
+     char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
+     
++#if CONFIG_USE_DEVICE_AEC && CONFIG_DEVICE_AEC_LOW_COST
++    // 设备端 AEC 省算力版：避免和播放、屏幕、摄像头抢 CPU 导致喇叭断续
++    afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_LOW_COST);
++    afe_config->aec_mode = AEC_MODE_VOIP_LOW_COST;
++    ns_model_name = nullptr;  // 降噪改用轻量 WebRTC
++#else
+     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
+     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
++#endif
+     afe_config->vad_mode = VAD_MODE_2;  // 提高 VAD 灵敏度
+     afe_config->vad_min_noise_ms = 50;   // 更快检测语音
+     if (vad_model_name != nullptr) {
+@@ -50,7 +57,12 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
+         afe_config->ns_model_name = ns_model_name;
+         afe_config->afe_ns_mode = AFE_NS_MODE_NET;
+     } else {
++#if CONFIG_USE_DEVICE_AEC && CONFIG_DEVICE_AEC_LOW_COST
++        afe_config->ns_init = true;
++        afe_config->afe_ns_mode = AFE_NS_MODE_WEBRTC;
++#else
+         afe_config->ns_init = false;
++#endif
+     }
+ 
+     afe_config->agc_init = true;  // 启用自动增益控制，提高麦克风灵敏度
