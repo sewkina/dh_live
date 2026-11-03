@@ -49,6 +49,8 @@ def install():
     orig_abort = abortHandle.handleAbortMessage
 
     async def abort_with_flush(conn):
+        conn._lulu_play_end = 0.0
+        conn._lulu_audio_t = None
         if _device_aec(conn):
             try:
                 await conn.websocket.send(json.dumps(
@@ -66,8 +68,12 @@ def install():
     orig_send = getattr(sah, "_do_send_audio", None)
     if orig_send is not None:
         async def do_send_audio(conn, *a, **kw):
+            now = time.time()
             if getattr(conn, "_lulu_audio_t", None) is None:
-                conn._lulu_audio_t = time.time()
+                conn._lulu_audio_t = now
+            # 估计噜噜实际播放到什么时候（服务器发得比播放快，每包约 60ms）
+            end = max(getattr(conn, "_lulu_play_end", 0.0) or 0.0, now)
+            conn._lulu_play_end = end + 0.06
             return await orig_send(conn, *a, **kw)
         sah._do_send_audio = do_send_audio
 
@@ -79,10 +85,12 @@ def install():
             return await orig_handle(conn, pcm_frame)
         conn._lulu_last_vad = False
         speaking = bool(getattr(conn, "client_is_speaking", False))
-        if not speaking:
-            conn._lulu_audio_t = None
-        elif orig_send is not None:
-            speaking = getattr(conn, "_lulu_audio_t", None) is not None
+        if orig_send is not None:
+            # 服务器发完语音就把 client_is_speaking 清掉，但噜噜还在播；按估计的播放结束时间算
+            playing = time.time() < (getattr(conn, "_lulu_play_end", 0.0) or 0.0) + 0.3
+            if not speaking and not playing:
+                conn._lulu_audio_t = None
+            speaking = getattr(conn, "_lulu_audio_t", None) is not None and (speaking or playing)
         await orig_handle(conn, pcm_frame)
         det = getattr(conn, "_lulu_bargein", None)
         if det is None:
