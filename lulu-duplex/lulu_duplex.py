@@ -49,6 +49,7 @@ def install():
     orig_abort = abortHandle.handleAbortMessage
 
     async def abort_with_flush(conn):
+        conn._lulu_drop_old = True   # 打断后，旧回答里已合成好的句子不再发
         conn._lulu_play_end = 0.0
         conn._lulu_audio_t = None
         if _device_aec(conn):
@@ -76,6 +77,33 @@ def install():
             conn._lulu_play_end = end + 0.06
             return await orig_send(conn, *a, **kw)
         sah._do_send_audio = do_send_audio
+
+    # 3b) 打断后丢掉旧回答的剩余语音；孩子的新一句开始（startToChat）时恢复
+    orig_msg = sah.sendAudioMessage
+
+    async def send_audio_message(conn, *a, **kw):
+        if getattr(conn, "_lulu_drop_old", False):
+            return
+        return await orig_msg(conn, *a, **kw)
+
+    sah.sendAudioMessage = send_audio_message
+    try:
+        from core.providers.tts import base as tts_base
+        if hasattr(tts_base, "sendAudioMessage"):
+            tts_base.sendAudioMessage = send_audio_message
+    except Exception:
+        pass
+
+    orig_chat = rah.startToChat
+
+    async def start_to_chat(conn, *a, **kw):
+        conn._lulu_drop_old = False
+        return await orig_chat(conn, *a, **kw)
+
+    rah.startToChat = start_to_chat
+    from core.providers.asr import base as _asr_base
+    if hasattr(_asr_base, "startToChat"):
+        _asr_base.startToChat = start_to_chat
 
     # 4) device_aec 连接：噜噜真的在出声时，检测到持续人声就打断
     orig_handle = rah.handleAudioMessage

@@ -78,4 +78,10 @@ if __name__ == "__main__":
         lulu_duplex.install()
     except Exception as e:
         print("lulu_duplex 未启用:", e)
+    # 垫音：识别出孩子的话后先放一个短萌宠音效
+    try:
+        from core.utils import lulu_filler
+        lulu_filler.install()
+    except Exception as e:
+        print("lulu_filler 未启用:", e)
     runpy.run_path("app.py", run_name="__main__")
